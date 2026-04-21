@@ -18,9 +18,14 @@ from .utils.fp import mk
 class CalRes:
     n: int
     auc: float
+    auc_flip: float
     bal_acc: float
     brier: float
     ece: float
+    p_min: float
+    p_mean: float
+    p_max: float
+    p_std: float
 
 
 def _entropy(p: np.ndarray, eps: float = 1e-12) -> np.ndarray:
@@ -74,12 +79,28 @@ def run_cal(pred: Path, sheet: Path, out: Path, bins: int = 10) -> None:
     y = df["y"].to_numpy(dtype=int)
     p = np.clip(df["p"].to_numpy(dtype=float), 0.0, 1.0)
 
-    auc = float(roc_auc_score(y, p)) if len(np.unique(y)) > 1 else float("nan")
+    if len(np.unique(y)) > 1:
+        auc = float(roc_auc_score(y, p))
+        auc_flip = float(roc_auc_score(y, 1.0 - p))
+    else:
+        auc = float("nan")
+        auc_flip = float("nan")
     bac = float(balanced_accuracy_score(y, (p >= 0.5).astype(int)))
     brier = float(np.mean((p - y) ** 2))
     ece = _ece(y, p, bins=bins)
 
-    res = CalRes(n=int(len(df)), auc=auc, bal_acc=bac, brier=brier, ece=ece)
+    res = CalRes(
+        n=int(len(df)),
+        auc=auc,
+        auc_flip=auc_flip,
+        bal_acc=bac,
+        brier=brier,
+        ece=ece,
+        p_min=float(np.min(p)) if len(p) else float("nan"),
+        p_mean=float(np.mean(p)) if len(p) else float("nan"),
+        p_max=float(np.max(p)) if len(p) else float("nan"),
+        p_std=float(np.std(p)) if len(p) else float("nan"),
+    )
 
     p_out = mk(out)
     (p_out / "metrics.json").write_text(json.dumps(res.__dict__, indent=2) + "\n")
@@ -135,4 +156,3 @@ def run_cal(pred: Path, sheet: Path, out: Path, bins: int = 10) -> None:
     plt.tight_layout()
     plt.savefig(p_out / "entropy_hist.png", dpi=200)
     plt.close()
-
