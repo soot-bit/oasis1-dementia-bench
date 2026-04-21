@@ -13,6 +13,8 @@ from sklearn.metrics import balanced_accuracy_score, roc_auc_score
 from sklearn.metrics import ConfusionMatrixDisplay, RocCurveDisplay
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
+from rich.console import Console
+from rich.table import Table
 
 from .io import read_lines, read_sheet
 from .utils.fp import mk
@@ -165,6 +167,7 @@ def _best_thr(y: np.ndarray, p: np.ndarray) -> float:
 
 
 def run_cnn2d(index: Path, sheet: Path, splits: Path, out: Path, seed: int, epochs: int, bs: int, lr: float) -> None:
+    con = Console()
     torch.manual_seed(seed)
     np.random.seed(seed)
 
@@ -205,7 +208,22 @@ def run_cnn2d(index: Path, sheet: Path, splits: Path, out: Path, seed: int, epoc
     best = {"auc": -1.0, "state": None}
     best_thr = 0.5
     hist = []
-    for _ in range(epochs):
+    # training header
+    t0 = Table(title="cnn2d train", show_lines=False)
+    t0.add_column("key")
+    t0.add_column("value")
+    t0.add_row("dev", str(dev))
+    t0.add_row("epochs", str(epochs))
+    t0.add_row("bs", str(bs))
+    t0.add_row("lr", str(lr))
+    t0.add_row("slices", str(cfg.slices))
+    t0.add_row("pick", str(cfg.pick))
+    t0.add_row("pos_weight", f"{pos_w:.3f} (neg={n_neg}, pos={n_pos})")
+    t0.add_row("n_tr / n_va / n_te", f"{len(dtr)} / {len(dva)} / {len(dte)}")
+    con.print(t0)
+
+    best_epoch = -1
+    for ep in tqdm(range(epochs), desc="epoch", total=epochs):
         net.train()
         tr_loss = []
         for xb, yb, _ in tqdm(dl_tr, desc="train", leave=False):
@@ -228,6 +246,7 @@ def run_cnn2d(index: Path, sheet: Path, splits: Path, out: Path, seed: int, epoc
         va_ps = np.array(list(va_p.values()), dtype=float) if va_p else np.array([], dtype=float)
         hist.append(
             {
+                "ep": int(ep + 1),
                 "tr_loss": float(np.mean(tr_loss)) if tr_loss else float("nan"),
                 "va_auc": float(auc),
                 "va_bal_acc05": float(bac05),
@@ -240,6 +259,13 @@ def run_cnn2d(index: Path, sheet: Path, splits: Path, out: Path, seed: int, epoc
             best["auc"] = auc
             best["state"] = {k: v.detach().cpu() for k, v in net.state_dict().items()}
             best_thr = float(thr)
+            best_epoch = int(ep + 1)
+
+        # show epoch summary in tqdm
+        tqdm.write(
+            f"ep {ep+1:03d}/{epochs} tr_loss={hist[-1]['tr_loss']:.4f} "
+            f"va_auc={auc:.3f} va_bac={hist[-1]['va_bal_acc']:.3f} thr={thr:.3f} va_p_std={hist[-1]['va_p_std']:.4g}"
+        )
 
     if best["state"] is not None:
         net.load_state_dict(best["state"])
@@ -269,6 +295,7 @@ def run_cnn2d(index: Path, sheet: Path, splits: Path, out: Path, seed: int, epoc
                 "slices": int(cfg.slices),
                 "pos_weight": float(pos_w),
                 "thr": float(best_thr),
+                "best_epoch": int(best_epoch),
                 "n_tr": int(len(dtr)),
                 "n_va": int(len(dva)),
                 "n_te": int(len(dte)),
@@ -299,6 +326,17 @@ def run_cnn2d(index: Path, sheet: Path, splits: Path, out: Path, seed: int, epoc
     plt.tight_layout()
     plt.savefig(run_dir / "roc.png", dpi=200)
     plt.close()
+
+    # final console summary
+    t1 = Table(title="cnn2d results (test)", show_lines=False)
+    t1.add_column("metric")
+    t1.add_column("value", justify="right")
+    t1.add_row("best_epoch", str(best_epoch))
+    t1.add_row("thr (val)", f"{best_thr:.4f}")
+    t1.add_row("auc", f"{te_auc:.4f}")
+    t1.add_row("bal_acc@0.5", f"{te_bac05:.4f}")
+    t1.add_row("bal_acc@thr", f"{te_bac:.4f}")
+    con.print(t1)
 
     plt.figure(figsize=(4, 4))
     ConfusionMatrixDisplay.from_predictions(y, (p >= best_thr).astype(int), normalize="true")
