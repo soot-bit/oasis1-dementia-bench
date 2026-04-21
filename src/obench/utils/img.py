@@ -22,4 +22,6 @@ def zscore_brain(a: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     v = a[m]
     mu = float(v.mean())
     sd = float(v.std())
-    return (a - mu) / (sd + eps)
+    out = np.zeros_like(a, dtype=np.float32)
+    out[m] = (a[m] - mu) / (sd + eps)
+    return out

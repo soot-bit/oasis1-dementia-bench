@@ -90,6 +90,9 @@ def run_split(index: Path, sheet: Path, out: Path, seed: int, test: float, val: 
     s = Split(train=sess_ids(tr_subj), val=sess_ids(va_subj), test=sess_ids(te_subj))
 
     mk(out)
-    (out / "train.txt").write_text("\n".join(s.train) + "\n")
-    (out / "val.txt").write_text("\n".join(s.val) + "\n")
-    (out / "test.txt").write_text("\n".join(s.test) + "\n")
+    def w(name: str, xs: list[str]) -> None:
+        (out / name).write_text(("\n".join(xs) + "\n") if xs else "")
+
+    w("train.txt", s.train)
+    w("val.txt", s.val)
+    w("test.txt", s.test)

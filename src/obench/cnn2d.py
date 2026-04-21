@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.metrics import balanced_accuracy_score, roc_auc_score
+from sklearn.metrics import ConfusionMatrixDisplay, RocCurveDisplay
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
@@ -162,3 +163,28 @@ def run_cnn2d(index: Path, sheet: Path, splits: Path, out: Path, seed: int, epoc
     (run_dir / "metrics.json").write_text(json.dumps({"auc": te_auc, "bal_acc": te_bac, "dev": str(dev)}, indent=2) + "\n")
     torch.save(net.state_dict(), run_dir / "model.pt")
     (run_dir / "pred.json").write_text(json.dumps(te_p, indent=2) + "\n")
+
+    # plots + errors
+    te_df = dte[["id", "subj", "Age", "M/F", "CDR", "MMSE"]].copy()
+    te_df["p"] = te_df["id"].map(te_p).astype(float)
+    te_df["y"] = _y(dte)
+    te_df["yhat"] = (te_df["p"] >= 0.5).astype(int)
+    te_df["ok"] = (te_df["y"] == te_df["yhat"]).astype(int)
+    te_df.sort_values(["ok", "p"], ascending=[True, False]).to_csv(run_dir / "errors.csv", index=False)
+
+    y = te_df["y"].to_numpy()
+    p = te_df["p"].to_numpy()
+
+    import matplotlib.pyplot as plt
+
+    plt.figure(figsize=(5, 4))
+    RocCurveDisplay.from_predictions(y, p)
+    plt.tight_layout()
+    plt.savefig(run_dir / "roc.png", dpi=200)
+    plt.close()
+
+    plt.figure(figsize=(4, 4))
+    ConfusionMatrixDisplay.from_predictions(y, (p >= 0.5).astype(int), normalize="true")
+    plt.tight_layout()
+    plt.savefig(run_dir / "cm.png", dpi=200)
+    plt.close()

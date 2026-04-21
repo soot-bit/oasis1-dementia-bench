@@ -8,6 +8,8 @@ from .split import run_split
 from .tab import run_tab
 from .cnn2d import run_cnn2d
 from .eda import run_eda
+from .manifest import run_manifest
+from .err import run_err_tab
 
 
 def _p(p: str) -> Path:
@@ -58,6 +60,17 @@ def main() -> None:
     ap_e.add_argument("--sheet", required=True, type=_p)
     ap_e.add_argument("--out", required=True, type=_p)
 
+    ap_m = sub.add_parser("manifest", help="build a merged manifest (index + labels + paths)")
+    ap_m.add_argument("--index", required=True, type=_p)
+    ap_m.add_argument("--sheet", required=True, type=_p)
+    ap_m.add_argument("--out", required=True, type=_p, help="output CSV path")
+    ap_m.add_argument("--mr1-only", action="store_true", default=True)
+    ap_m.add_argument("--label-only", action="store_true", default=True)
+
+    ap_x = sub.add_parser("errtab", help="tabular error analysis (from tab run outputs)")
+    ap_x.add_argument("--errors", required=True, type=_p, help="errors.csv from `obench tab`")
+    ap_x.add_argument("--out", required=True, type=_p, help="output dir")
+
     a = ap.parse_args()
 
     if a.cmd == "index":
@@ -74,6 +87,12 @@ def main() -> None:
         return
     if a.cmd == "eda":
         run_eda(index=a.index, sheet=a.sheet, out=a.out)
+        return
+    if a.cmd == "manifest":
+        run_manifest(index=a.index, sheet=a.sheet, out=a.out, mr1_only=a.mr1_only, label_only=a.label_only)
+        return
+    if a.cmd == "errtab":
+        run_err_tab(errors=a.errors, out=a.out)
         return
 
     raise SystemExit(f"unknown cmd: {a.cmd}")

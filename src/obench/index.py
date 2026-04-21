@@ -88,26 +88,33 @@ def _sess(p: Path) -> Sess:
 
 
 def run_index(roots: list[Path], out: Path) -> None:
+    base = Path.cwd().resolve()
     sess: list[Sess] = []
     for r in roots:
         for p in _iter_sess_roots(r):
             sess.append(_sess(p))
+
+    def rel(p: Path) -> str:
+        try:
+            return str(p.resolve().relative_to(base))
+        except Exception:
+            return str(p)
 
     df = pd.DataFrame(
         [
             {
                 "id": s.id,
                 "subj": s.subj,
-                "root": str(s.root),
-                "raw": str(s.raw),
-                "proc": str(s.proc),
-                "seg": str(s.seg),
-                "xml": str(s.xml),
-                "txt": str(s.txt),
-                "t88_mask": str(s.t88_mask) if s.t88_mask else "",
-                "t88_gfc": str(s.t88_gfc) if s.t88_gfc else "",
-                "subj111": str(s.subj111) if s.subj111 else "",
-                "fseg": str(s.fseg) if s.fseg else "",
+                "root": rel(s.root),
+                "raw": rel(s.raw),
+                "proc": rel(s.proc),
+                "seg": rel(s.seg),
+                "xml": rel(s.xml),
+                "txt": rel(s.txt),
+                "t88_mask": rel(s.t88_mask) if s.t88_mask else "",
+                "t88_gfc": rel(s.t88_gfc) if s.t88_gfc else "",
+                "subj111": rel(s.subj111) if s.subj111 else "",
+                "fseg": rel(s.fseg) if s.fseg else "",
             }
             for s in sess
         ]
