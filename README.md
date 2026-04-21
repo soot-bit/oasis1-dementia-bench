@@ -2,6 +2,8 @@
 
 This repository implements a reproducible benchmark for dementia classification on **OASIS-1** using **subject-level (leakage-aware) splits**, simple **clinical/morphometric** baselines, and a **processed structural MRI** baseline. The goal is to answer one practical question under a setup that resists “small data” pitfalls: do image models actually beat structured features, or do they only look better under leaky evaluation?
 
+Main claim: **tabular clinical + morphometric features provide a strong baseline signal; MRI models are only meaningful when evaluated directly against this baseline under leakage-aware subject splits.**
+
 ## Problem
 
 Can dementia-related signal in OASIS-1 (label: `CDR>0` vs `CDR=0`) be predicted reliably from processed T1 MRI, and how does MRI modelling compare to tabular clinical/morphometric baselines under subject-level splits?
@@ -22,13 +24,19 @@ Can dementia-related signal in OASIS-1 (label: `CDR>0` vs `CDR=0`) be predicted 
 
 Note: for `disc1` only, the test set is tiny (`n=5` labelled subjects in this split), so these numbers are high-variance and intended mainly to demonstrate the benchmark workflow.
 
-| Model | Inputs | ROC-AUC | Balanced acc | Brier | ECE |
+| Model | Input | ROC-AUC | Balanced acc | Brier | ECE |
 |---|---|---:|---:|---:|---:|
-| Logistic regression | age/sex/hand + Educ/SES + eTIV/nWBV/ASF | 0.667 | 0.583 | 0.225 | 0.263 |
-| 2D CNN | processed MRI (`T88_111/*_t88_masked_gfc`) | 0.167 | 0.500 | 0.247 | 0.084 |
-| Fusion (log-reg) | tabular + 2D CNN embedding | 0.667 | 0.583 | — | — |
+| Logistic regression | tabular | 0.667 | 0.583 | 0.225 | 0.263 |
+| Random forest | tabular | 0.667 | 0.583 | 0.253 | 0.437 |
+| Gradient boosting | tabular | 0.583 | 0.750 | 0.200 | 0.200 |
+| 2D CNN | MRI | 0.167 | 0.500 | 0.247 | 0.084 |
+| Fusion (log-reg) | tabular + MRI embedding | 0.667 | 0.583 | — | — |
 
 ![Tabular ROC](docs/img/roc.png)
+
+Tabular model comparison (ROC-AUC):
+
+![Tabular comparison](docs/img/tab_compare_auc.png)
 
 Calibration (tabular baseline):
 
@@ -37,6 +45,8 @@ Calibration (tabular baseline):
 ## One takeaway
 
 On very small OASIS-1 subsets, **clinical + morphometric features provide a strong baseline** and should be treated as the reference point before claiming gains from image models. This repo is built to scale from `disc1` to all discs to make that comparison stable and defensible.
+
+Conclusion (current snapshot): on `disc1`, the image baseline and fusion do not yet beat tabular; scaling to all discs is the next step before drawing strong conclusions.
 
 ## Main contribution
 
