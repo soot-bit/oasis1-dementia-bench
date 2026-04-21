@@ -27,7 +27,7 @@ def main():
     ax.set_ylim(0, 3.2)
     ax.axis("off")
 
-    box(ax, 0.3, 2.1, 2.2, 0.8, "Extracted OASIS discs\n(disc1/disc2/disc12)")
+    box(ax, 0.3, 2.1, 2.2, 0.8, "Extracted OASIS discs\n(disc1/disc2/disc3)")
     box(ax, 3.0, 2.1, 1.9, 0.8, "Index\n`index.csv`")
     box(ax, 5.2, 2.1, 2.1, 0.8, "Manifest\n`manifest.csv`")
     box(ax, 7.7, 2.1, 2.0, 0.8, "Subject splits\n(train/val/test)")
@@ -53,4 +53,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

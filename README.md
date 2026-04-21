@@ -8,7 +8,9 @@ Main claim: **tabular clinical + morphometric features provide a strong baseline
 
 Can dementia-related signal in OASIS-1 (label: `CDR>0` vs `CDR=0`) be predicted reliably from processed T1 MRI, and how does MRI modelling compare to tabular clinical/morphometric baselines under subject-level splits?
 
-## Dataset (example: `disc1`, MR1-only)
+## Dataset
+
+Recommended minimum benchmark setup: extract and index **`disc1` + `disc2` + `disc3`**, then keep `MR1` only for the default split logic.
 
 | Item | Value |
 |---|---:|
@@ -20,7 +22,7 @@ Can dementia-related signal in OASIS-1 (label: `CDR>0` vs `CDR=0`) be predicted 
 
 ![Label counts](docs/img/y_counts.png)
 
-## Results (example run; `disc1`, seed 7; labelled rows only)
+## Results (current committed snapshot; `disc1`, seed 7; labelled rows only)
 
 Note: for `disc1` only, the test set is tiny (`n=5` labelled subjects in this split), so these numbers are high-variance and intended mainly to demonstrate the benchmark workflow.
 
@@ -46,7 +48,7 @@ Calibration (tabular baseline):
 
 On very small OASIS-1 subsets, **clinical + morphometric features provide a strong baseline** and should be treated as the reference point before claiming gains from image models. This repo is built to scale from `disc1` to all discs to make that comparison stable and defensible.
 
-Conclusion (current snapshot): on `disc1`, the image baseline and fusion do not yet beat tabular; scaling to all discs is the next step before drawing strong conclusions.
+Conclusion (current snapshot): on `disc1`, the image baseline and fusion do not yet beat tabular. The intended benchmark run is `disc1` + `disc2` + `disc3`, which gives a less fragile estimate than a single-disc split.
 
 CNN sanity check (common pitfall on tiny test sets): if `obench cal` reports very small `p_std` (nearly-constant probabilities) and `auc_flip >> auc`, the model is effectively not separating classes and the AUC ranking may look “inverted” due to tiny jitter. Treat `auc_flip` as a diagnostic, not as a score to report.
 
@@ -69,15 +71,15 @@ If deep learning “wins” on small cohorts only under leaky splits, duplicated
 ## Data layout
 
 - `data/raw/oasis1/`: downloaded archives + spreadsheets (immutable)
-- `data/interim/oasis1/`: extracted archives + index files (derived)
+- `data/oasis1/`: extracted discs + manifest files + split files (derived)
 - `data/processed/oasis1/`: optional preprocessed outputs (derived)
 - `reports/`: plots, tables, error analysis
 
 ## First-class artefacts
 
-- `data/interim/oasis1/index.csv`: file manifest created by `obench index` (paths + canonical processed volumes)
-- `data/interim/oasis1/manifest.csv`: merged manifest (index + labels + key columns) created by `obench manifest`
-- `splits/oasis1/*.txt`: subject-level split files created by `obench split`
+- `data/oasis1/index.csv`: file manifest created by `obench index` (paths + canonical processed volumes)
+- `data/oasis1/manifest.csv`: merged manifest (index + labels + key columns) created by `obench manifest`
+- `data/oasis1/train.txt`, `data/oasis1/val.txt`, `data/oasis1/test.txt`: subject-level split files created by `obench split`
 
 ## Setup (uv)
 
@@ -102,29 +104,41 @@ uv run pytest
 
 ## 1) Index extracted sessions
 
-Extract one or more discs (example for disc1):
+Recommended: prepare at least `disc1`, `disc2`, and `disc3`. Keep the raw archives in `data/raw/oasis1/` and extract into `data/oasis1/`.
+
+Fast path:
 
 ```bash
-mkdir -p data/interim/oasis1
-tar -xzf data/raw/oasis1/oasis_cross-sectional_disc1.tar.gz -C data/interim/oasis1
+bash scripts/prep_oasis1.sh
 ```
 
-Build an index:
+This script:
+
+- checks for `disc1` / `disc2` / `disc3` archives and the cohort spreadsheet
+- extracts missing discs into `data/oasis1/`
+- writes `data/oasis1/index.csv`
+- writes `data/oasis1/manifest.csv`
+- writes `data/oasis1/train.txt`, `data/oasis1/val.txt`, `data/oasis1/test.txt`
+
+Manual equivalent:
 
 ```bash
-uv run obench index --root data/interim/oasis1/disc1 --out data/interim/oasis1/index.csv
+mkdir -p data/oasis1
+tar -xzf data/raw/oasis1/oasis_cross-sectional_disc1.tar.gz -C data/oasis1
+tar -xzf data/raw/oasis1/oasis_cross-sectional_disc2.tar.gz -C data/oasis1
+tar -xzf data/raw/oasis1/oasis_cross-sectional_disc3.tar.gz -C data/oasis1
 ```
 
-Multiple discs (repeat `--root`):
+Build an index from the recommended 3-disc setup:
 
 ```bash
-uv run obench index --root data/interim/oasis1/disc1 --root data/interim/oasis1/disc2 --root data/interim/oasis1/disc12 --out data/interim/oasis1/index.csv
+uv run obench index --root data/oasis1/disc1 --root data/oasis1/disc2 --root data/oasis1/disc3 --out data/oasis1/index.csv
 ```
 
 Or pass the parent folder (auto-detects `disc*` subfolders):
 
 ```bash
-uv run obench index --root data/interim/oasis1 --out data/interim/oasis1/index.csv
+uv run obench index --root data/oasis1 --out data/oasis1/index.csv
 ```
 
 The index stores per-session paths to `RAW/`, `PROCESSED/`, `FSL_SEG/`, `*.xml`, `*.txt`, and the canonical processed images.
@@ -134,7 +148,7 @@ The index stores per-session paths to `RAW/`, `PROCESSED/`, `FSL_SEG/`, `*.xml`,
 This produces a single CSV you can treat like a benchmark dataset table (labels + paths).
 
 ```bash
-uv run obench manifest --index data/interim/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --out data/interim/oasis1/manifest.csv
+uv run obench manifest --index data/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --out data/oasis1/manifest.csv
 ```
 
 ## 2) Create subject-level splits
@@ -142,23 +156,25 @@ uv run obench manifest --index data/interim/oasis1/index.csv --sheet data/raw/oa
 Default: use `MR1` only (one session per subject), and stratify by dementia label.
 
 ```bash
-uv run obench split --index data/interim/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --out splits/oasis1
+uv run obench split --index data/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --out data/oasis1
 ```
 
 Outputs:
 
-- `splits/oasis1/train.txt`
-- `splits/oasis1/val.txt`
-- `splits/oasis1/test.txt`
+- `data/oasis1/train.txt`
+- `data/oasis1/val.txt`
+- `data/oasis1/test.txt`
 
 Each file contains one session `ID` per line (e.g. `OAS1_0018_MR1`).
+
+Recommended practice: do not benchmark on a single disc unless you are only smoke-testing the pipeline. Use at least `disc1` + `disc2` + `disc3` for any metric you want to show publicly.
 
 ## 3) Tabular baselines (clinical + morphometric)
 
 Runs a regularized logistic regression with a simple, explicit feature set.
 
 ```bash
-uv run obench tab --index data/interim/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --splits splits/oasis1 --out reports/tab
+uv run obench tab --index data/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --splits data/oasis1 --out reports/tab
 ```
 
 Outputs metrics + ROC/confusion matrix plots, and a CSV of per-subject errors.
@@ -174,7 +190,7 @@ Example outputs committed: `docs/err/tab/README.md`, `docs/err/tab/age_by_tag.pn
 ## 3.5) EDA (quick sanity checks)
 
 ```bash
-uv run obench eda --index data/interim/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --out reports/eda
+uv run obench eda --index data/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --out reports/eda
 ```
 
 This writes label counts (for labelled rows), missingness summary, and a few basic plots.
@@ -184,7 +200,7 @@ This writes label counts (for labelled rows), missingness summary, and a few bas
 Trains a small 2D CNN on slices from the canonical processed volume (`T88_111/*_t88_masked_gfc`).
 
 ```bash
-uv run obench cnn2d --index data/interim/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --splits splits/oasis1 --out reports/cnn2d
+uv run obench cnn2d --index data/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --splits data/oasis1 --out reports/cnn2d
 ```
 
 ## 4.5) Calibration / uncertainty (simple)
@@ -212,13 +228,13 @@ Example plots committed:
 2) Extract per-subject embeddings:
 
 ```bash
-uv run obench emb2d --index data/interim/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --splits splits/oasis1 --weights reports/cnn2d/run/model.pt --out reports/emb/emb2d.csv
+uv run obench emb2d --index data/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --splits data/oasis1 --weights reports/cnn2d/run/model.pt --out reports/emb/emb2d.csv
 ```
 
 3) Train fusion:
 
 ```bash
-uv run obench fuse --index data/interim/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --emb reports/emb/emb2d.csv --splits splits/oasis1 --out reports/fuse --model logreg
+uv run obench fuse --index data/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --emb reports/emb/emb2d.csv --splits data/oasis1 --out reports/fuse --model logreg
 ```
 
 ## Notes on labels

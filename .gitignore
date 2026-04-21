@@ -7,12 +7,10 @@ __pycache__/
 *.egg-info/
 *.db
 
-data/interim/
+data/oasis1/
 data/processed/
 reports/
 runs/
-
-splits/
 
 # never commit raw dataset artifacts (keep only the small README)
 data/raw/oasis1/*

@@ -4,7 +4,7 @@ This folder contains the OASIS-1 cross-sectional dataset artifacts exactly as do
 
 ## Files
 
-- `oasis_cross-sectional_disc12.tar.gz` / `oasis_cross-sectional_disc2.tar.gz`
+- `oasis_cross-sectional_disc1.tar.gz` / `oasis_cross-sectional_disc2.tar.gz` / `oasis_cross-sectional_disc3.tar.gz`
   - Compressed archives containing per-session MRI data organised by session directory (e.g. `OAS1_0012_MR1/`).
   - Each session typically includes:
     - `RAW/` (individual T1 scan repetitions)
@@ -36,4 +36,3 @@ This folder contains the OASIS-1 cross-sectional dataset artifacts exactly as do
 
 - `oasis_cross-sectional_facts-bcc7a002dfb104f4.pdf`
   - OASIS fact sheet describing the dataset, directory structure, and variable definitions.
-
