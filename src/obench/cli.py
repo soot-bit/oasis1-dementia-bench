@@ -57,6 +57,10 @@ def main() -> None:
     ap_c.add_argument("--epochs", type=int, default=30)
     ap_c.add_argument("--bs", type=int, default=8)
     ap_c.add_argument("--lr", type=float, default=3e-4)
+    ap_c.add_argument("--slices", type=int, default=24)
+    ap_c.add_argument("--pick", choices=["topnz", "lin"], default="topnz")
+    ap_c.add_argument("--pool", choices=["max", "mean", "lse"], default="max")
+    ap_c.add_argument("--no-aug", action="store_true")
 
     ap_e = sub.add_parser("eda", help="basic EDA from spreadsheet + index")
     ap_e.add_argument("--index", required=True, type=_p)
@@ -86,6 +90,7 @@ def main() -> None:
     ap_b.add_argument("--splits", required=True, type=_p)
     ap_b.add_argument("--weights", required=True, type=_p, help="model.pt from `obench cnn2d`")
     ap_b.add_argument("--out", required=True, type=_p, help="output CSV (id,y,e0..e63)")
+    ap_b.add_argument("--pool", choices=["max", "mean"], default="max", help="embedding pooling (match cnn2d if possible)")
 
     ap_f = sub.add_parser("fuse", help="fusion baseline (tabular + 2D CNN embedding)")
     ap_f.add_argument("--index", required=True, type=_p)
@@ -107,7 +112,20 @@ def main() -> None:
         run_tab(index=a.index, sheet=a.sheet, splits=a.splits, out=a.out)
         return
     if a.cmd == "cnn2d":
-        run_cnn2d(index=a.index, sheet=a.sheet, splits=a.splits, out=a.out, seed=a.seed, epochs=a.epochs, bs=a.bs, lr=a.lr)
+        run_cnn2d(
+            index=a.index,
+            sheet=a.sheet,
+            splits=a.splits,
+            out=a.out,
+            seed=a.seed,
+            epochs=a.epochs,
+            bs=a.bs,
+            lr=a.lr,
+            slices=a.slices,
+            pick=a.pick,
+            pool=a.pool,
+            aug=(not a.no_aug),
+        )
         return
     if a.cmd == "eda":
         run_eda(index=a.index, sheet=a.sheet, out=a.out)
@@ -122,7 +140,7 @@ def main() -> None:
         run_cal(pred=a.pred, sheet=a.sheet, out=a.out, bins=a.bins)
         return
     if a.cmd == "emb2d":
-        run_emb2d(index=a.index, sheet=a.sheet, splits=a.splits, weights=a.weights, out=a.out)
+        run_emb2d(index=a.index, sheet=a.sheet, splits=a.splits, weights=a.weights, out=a.out, pool=a.pool)
         return
     if a.cmd == "fuse":
         run_fuse(index=a.index, sheet=a.sheet, emb=a.emb, splits=a.splits, out=a.out, model=a.model)

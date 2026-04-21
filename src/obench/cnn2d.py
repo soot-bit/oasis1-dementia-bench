@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from rich.console import Console
 from rich.table import Table
+import math
 
 from .io import read_lines, read_sheet
 from .utils.fp import mk
@@ -26,7 +27,7 @@ class Cfg:
     slices: int = 24  # per volume (evenly spaced)
     pick: str = "topnz"  # topnz|lin
     aug: bool = True
-    pool: str = "max"  # mean|max
+    pool: str = "max"  # mean|max|lse
 
 
 def _y(df: pd.DataFrame) -> np.ndarray:
@@ -139,6 +140,10 @@ def _emb(net: Net, xb: torch.Tensor) -> torch.Tensor:
 def _step_pool(net: Net, xb: torch.Tensor, pool: str) -> torch.Tensor:
     b, k = xb.shape[:2]
     x = xb.view(b * k, *xb.shape[2:])
+    if pool == "lse":
+        logit = net(x).view(b, k)
+        return torch.logsumexp(logit, dim=1) - math.log(max(1, k))
+
     e = net.enc(x).view(b, k, -1)
     if pool == "mean":
         g = e.mean(1)
@@ -190,7 +195,20 @@ def _best_thr(y: np.ndarray, p: np.ndarray) -> float:
     return float(best[0])
 
 
-def run_cnn2d(index: Path, sheet: Path, splits: Path, out: Path, seed: int, epochs: int, bs: int, lr: float) -> None:
+def run_cnn2d(
+    index: Path,
+    sheet: Path,
+    splits: Path,
+    out: Path,
+    seed: int,
+    epochs: int,
+    bs: int,
+    lr: float,
+    slices: int,
+    pick: str,
+    pool: str,
+    aug: bool,
+) -> None:
     con = Console()
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -212,7 +230,7 @@ def run_cnn2d(index: Path, sheet: Path, splits: Path, out: Path, seed: int, epoc
     dva = df[df["id"].isin(va)].copy()
     dte = df[df["id"].isin(te)].copy()
 
-    cfg = Cfg()
+    cfg = Cfg(slices=int(slices), pick=str(pick), pool=str(pool), aug=bool(aug))
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     net = Net().to(dev)

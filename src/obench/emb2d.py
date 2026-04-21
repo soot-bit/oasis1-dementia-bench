@@ -14,7 +14,7 @@ from .io import read_lines, read_sheet
 from .utils.fp import mk
 
 
-def run_emb2d(index: Path, sheet: Path, splits: Path, weights: Path, out: Path) -> None:
+def run_emb2d(index: Path, sheet: Path, splits: Path, weights: Path, out: Path, pool: str = "max") -> None:
     idx = pd.read_csv(index)
     sh = read_sheet(sheet).rename(columns={"ID": "id"})
     df = idx.merge(sh, on="id", how="inner")
@@ -35,7 +35,7 @@ def run_emb2d(index: Path, sheet: Path, splits: Path, weights: Path, out: Path) 
     net.load_state_dict(sd)
     net.eval()
 
-    cfg = Cfg()
+    cfg = Cfg(pool=pool)
     dl = DataLoader(Vol2D(df, cfg), batch_size=4, shuffle=False, num_workers=0, collate_fn=_collate)
 
     rows = []
