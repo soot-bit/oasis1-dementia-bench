@@ -14,8 +14,10 @@ dependencies = [
   "openpyxl>=3.1",
   "torch>=2.2",
   "tqdm>=4.66",
-  "pytest>=8.0",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
 
 [project.scripts]
 obench = "obench.cli:main"
@@ -26,6 +28,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

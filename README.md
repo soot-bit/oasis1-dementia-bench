@@ -54,6 +54,21 @@ If deep learning “beats” a classical baseline on small cohorts only under a 
 uv sync
 ```
 
+## Install (editable)
+
+From the repo root:
+
+```bash
+uv pip install -e .
+```
+
+Dev tools (tests):
+
+```bash
+uv pip install -e ".[dev]"
+uv run pytest
+```
+
 ## 1) Index extracted sessions
 
 Extract one or more discs (example for disc1):
