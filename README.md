@@ -20,13 +20,19 @@ Can dementia-related signal in OASIS-1 (label: `CDR>0` vs `CDR=0`) be predicted 
 
 ## Results (example run; `disc1`, seed 7; labelled rows only)
 
-| Model | Inputs | ROC-AUC | Balanced acc |
-|---|---|---:|---:|
-| Logistic regression | age/sex/hand + Educ/SES + eTIV/nWBV/ASF | 0.667 | 0.583 |
-| 2D CNN | processed MRI (`T88_111/*_t88_masked_gfc`) | 0.167 | 0.500 |
-| Fusion (log-reg) | tabular + 2D CNN embedding | 0.667 | 0.583 |
+Note: for `disc1` only, the test set is tiny (`n=5` labelled subjects in this split), so these numbers are high-variance and intended mainly to demonstrate the benchmark workflow.
+
+| Model | Inputs | ROC-AUC | Balanced acc | Brier | ECE |
+|---|---|---:|---:|---:|---:|
+| Logistic regression | age/sex/hand + Educ/SES + eTIV/nWBV/ASF | 0.667 | 0.583 | 0.225 | 0.263 |
+| 2D CNN | processed MRI (`T88_111/*_t88_masked_gfc`) | 0.167 | 0.500 | 0.247 | 0.084 |
+| Fusion (log-reg) | tabular + 2D CNN embedding | 0.667 | 0.583 | — | — |
 
 ![Tabular ROC](docs/img/roc.png)
+
+Calibration (tabular baseline):
+
+![Tab reliability](docs/img/tab_reliability.png)
 
 ## One takeaway
 
