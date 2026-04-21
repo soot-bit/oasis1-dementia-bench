@@ -1,39 +1,49 @@
-# OASIS-1 Dementia Benchmark
+# OASIS-1 Dementia Benchmark: Leakage-Aware MRI + Clinical Baselines
 
-Small MRI datasets are where it’s easiest to fool yourself: leakage, duplicated scans, label sparsity, and “too-smart” clinical proxies can all inflate results. This repo is a deliberately simple, leakage-aware benchmark for dementia classification on OASIS-1 that makes the comparison explicit: **classical clinical/morphometric baselines vs modelling signal from processed structural MRI**.
+This repository implements a reproducible benchmark for dementia classification on **OASIS-1** using **subject-level (leakage-aware) splits**, simple **clinical/morphometric** baselines, and a **processed structural MRI** baseline. The goal is to answer one practical question under a setup that resists “small data” pitfalls: do image models actually beat structured features, or do they only look better under leaky evaluation?
 
-## Question
+## Problem
 
-Can subject-level dementia-related signal in OASIS-1 be predicted reliably from processed structural MRI, and how does raw image modelling compare against simple clinical and morphometric baselines?
+Can dementia-related signal in OASIS-1 (label: `CDR>0` vs `CDR=0`) be predicted reliably from processed T1 MRI, and how does MRI modelling compare to tabular clinical/morphometric baselines under subject-level splits?
+
+## Dataset (example: `disc1`, MR1-only)
+
+| Item | Value |
+|---|---:|
+| Sessions indexed | 39 |
+| Subjects (MR1) | 39 |
+| Labelled sessions (`CDR` present) | 25 |
+| Dementia cases (`CDR>0`) | 12 |
+| Non-dementia (`CDR=0`) | 13 |
+
+![Label counts](docs/img/y_counts.png)
+
+## Results (example run; `disc1`, seed 7; labelled rows only)
+
+| Model | Inputs | ROC-AUC | Balanced acc |
+|---|---|---:|---:|
+| Logistic regression | age/sex/hand + Educ/SES + eTIV/nWBV/ASF | 0.667 | 0.583 |
+| 2D CNN | processed MRI (`T88_111/*_t88_masked_gfc`) | 0.167 | 0.500 |
+
+![Tabular ROC](docs/img/roc.png)
+
+## One takeaway
+
+On very small OASIS-1 subsets, **clinical + morphometric features provide a strong baseline** and should be treated as the reference point before claiming gains from image models. This repo is built to scale from `disc1` to all discs to make that comparison stable and defensible.
+
+## Main contribution
+
+- A leakage-aware, benchmark-style pipeline (index → manifest → subject splits → baselines → error analysis).
+- A first-class manifest (`index.csv`/`manifest.csv`) so experiments are “dataset-like”, not script-like.
+- Baselines that make the comparison explicit: tabular (structured) vs image (processed MRI).
 
 ## Pipeline (high level)
 
 ![Pipeline](docs/img/pipeline.png)
 
-## Baseline results (example run; `disc1`, MR1-only, labelled rows only)
-
-These numbers are from one small run (seed 7) and will change with discs, splits, and training settings.
-
-| Model | Inputs | Leakage-aware split | ROC-AUC | Balanced acc |
-|---|---|---:|---:|---:|
-| Logistic regression | age/sex/hand + Educ/SES + eTIV/nWBV/ASF | yes | 0.667 | 0.583 |
-| 2D CNN | processed MRI (`T88_111/*_t88_masked_gfc`) | yes | 0.167 | 0.500 |
-
-Tabular ROC / confusion matrix:
-
-![ROC](docs/img/roc.png)
-![Confusion matrix](docs/img/cm.png)
-
-## Main findings (current state)
-
-- A tabular baseline using demographics + morphometrics provides a strong non-image reference point.
-- A processed-MRI 2D CNN baseline is implemented as an image baseline (and currently underperforms on this tiny `disc1` subset).
-- Splits are subject-level and MR1-only by default to reduce leakage from repeated acquisitions.
-- Indexing scales from a single disc to multiple discs, producing a de-duplicated session manifest.
-
 ## Why this matters
 
-If deep learning “beats” a classical baseline on small cohorts only under a leaky split or with heavy label/feature shortcuts, that’s not progress. A clean benchmark that surfaces cohort size, missingness, split rules, and failure cases is a better starting point for trustworthy biomedical imaging research.
+If deep learning “wins” on small cohorts only under leaky splits, duplicated scans, or hidden shortcuts, it’s not a trustworthy result. A benchmark that surfaces split rules, cohort size/missingness, and failure cases is a better starting point for biomedical imaging research.
 
 ## Data layout
 
@@ -151,8 +161,6 @@ This writes label counts (for labelled rows), missingness summary, and a few bas
 ## 4) 2D MRI baseline (from processed MRI)
 
 Trains a small 2D CNN on slices from the canonical processed volume (`T88_111/*_t88_masked_gfc`).
-
-Run this in a separate shell:
 
 ```bash
 uv run obench cnn2d --index data/interim/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --splits splits/oasis1 --out reports/cnn2d
