@@ -5,6 +5,7 @@ __pycache__/
 *.crdownload
 .~lock*
 *.egg-info/
+*.db
 
 data/interim/
 data/processed/

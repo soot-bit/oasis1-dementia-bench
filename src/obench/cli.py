@@ -13,6 +13,7 @@ from .err import run_err_tab
 from .cal import run_cal
 from .emb2d import run_emb2d
 from .fuse import run_fuse
+from .bench import run_benchcnn
 
 
 def _p(p: str) -> Path:
@@ -108,6 +109,16 @@ def main() -> None:
     ap_f.add_argument("--out", required=True, type=_p)
     ap_f.add_argument("--model", choices=["mlp", "logreg"], default="mlp")
 
+    ap_q = sub.add_parser("benchcnn", help="run a CNN benchmark matrix and collect summary")
+    ap_q.add_argument("--index", required=True, type=_p)
+    ap_q.add_argument("--sheet", required=True, type=_p)
+    ap_q.add_argument("--splits", required=True, type=_p)
+    ap_q.add_argument("--out", required=True, type=_p)
+    ap_q.add_argument("--preset", choices=["quick", "gpu"], default="gpu")
+    ap_q.add_argument("--epochs", type=int, default=20)
+    ap_q.add_argument("--seed", type=int, default=7)
+    ap_q.add_argument("--limit", type=int)
+
     a = ap.parse_args()
 
     if a.cmd == "index":
@@ -167,6 +178,9 @@ def main() -> None:
         return
     if a.cmd == "fuse":
         run_fuse(index=a.index, sheet=a.sheet, emb=a.emb, splits=a.splits, out=a.out, model=a.model)
+        return
+    if a.cmd == "benchcnn":
+        run_benchcnn(index=a.index, sheet=a.sheet, splits=a.splits, out=a.out, preset=a.preset, epochs=a.epochs, seed=a.seed, limit=a.limit)
         return
 
     raise SystemExit(f"unknown cmd: {a.cmd}")
