@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
@@ -28,6 +29,8 @@ class Cfg:
     pick: str = "topnz"  # topnz|lin
     aug: bool = True
     pool: str = "max"  # mean|max|lse
+    axis: int = 2
+    ch: int = 1
 
 
 def _y(df: pd.DataFrame) -> np.ndarray:
@@ -84,10 +87,26 @@ class Vol2D(Dataset):
         r = self.df.iloc[i]
         p = Path(r["t88_mask"])
         a = zscore_brain(load_analyze(p))
-        ix = _pick_slices(a, self.cfg.slices, self.cfg.pick)
-        xs = a[:, :, ix]  # H,W,k
-        xs = np.moveaxis(xs, -1, 0)  # k,H,W
-        xs = xs[:, None, :, :]  # k,1,H,W
+        # slice along requested axis (0/1/2), always treat slice dimension as last
+        if self.cfg.axis == 0:
+            a2 = np.moveaxis(a, 0, -1)  # (Y,Z,X)
+        elif self.cfg.axis == 1:
+            a2 = np.moveaxis(a, 1, -1)  # (X,Z,Y)
+        else:
+            a2 = a  # (X,Y,Z)
+
+        ix = _pick_slices(a2, self.cfg.slices, self.cfg.pick)
+
+        # build K slices, each is either 1ch or 3ch (2.5D) using neighbors
+        sl = []
+        for j in ix.tolist():
+            if self.cfg.ch == 3:
+                js = [max(0, j - 1), j, min(a2.shape[-1] - 1, j + 1)]
+                s = np.stack([a2[..., t] for t in js], axis=0)  # 3,H,W
+            else:
+                s = a2[..., j][None, ...]  # 1,H,W
+            sl.append(s.astype(np.float32))
+        xs = np.stack(sl, axis=0)  # K,C,H,W
         x = torch.from_numpy(xs)
         if self.cfg.aug:
             x = _aug(x)
@@ -95,10 +114,10 @@ class Vol2D(Dataset):
         return x, torch.tensor(y, dtype=torch.long), str(r["id"])
 
 
-class Net(nn.Module):
-    def __init__(self):
+class TinyNet(nn.Module):
+    def __init__(self, in_ch: int):
         super().__init__()
-        self.c1 = nn.Conv2d(1, 16, 3, padding=1)
+        self.c1 = nn.Conv2d(in_ch, 16, 3, padding=1)
         self.c2 = nn.Conv2d(16, 32, 3, padding=1)
         self.c3 = nn.Conv2d(32, 64, 3, padding=1)
         self.h = nn.Linear(64, 1)
@@ -117,27 +136,68 @@ class Net(nn.Module):
         return self.h(e).squeeze(1)
 
 
+class BasicBlock(nn.Module):
+    def __init__(self, in_c: int, out_c: int, stride: int = 1):
+        super().__init__()
+        self.c1 = nn.Conv2d(in_c, out_c, 3, stride=stride, padding=1, bias=False)
+        self.b1 = nn.BatchNorm2d(out_c)
+        self.c2 = nn.Conv2d(out_c, out_c, 3, stride=1, padding=1, bias=False)
+        self.b2 = nn.BatchNorm2d(out_c)
+        self.down = None
+        if stride != 1 or in_c != out_c:
+            self.down = nn.Sequential(
+                nn.Conv2d(in_c, out_c, 1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_c),
+            )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        r = x
+        x = F.relu(self.b1(self.c1(x)))
+        x = self.b2(self.c2(x))
+        if self.down is not None:
+            r = self.down(r)
+        x = F.relu(x + r)
+        return x
+
+
+class ResNet18(nn.Module):
+    def __init__(self, in_ch: int):
+        super().__init__()
+        self.c0 = nn.Conv2d(in_ch, 64, 7, stride=2, padding=3, bias=False)
+        self.b0 = nn.BatchNorm2d(64)
+        self.p0 = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.l1 = self._layer(64, 64, n=2, stride=1)
+        self.l2 = self._layer(64, 128, n=2, stride=2)
+        self.l3 = self._layer(128, 256, n=2, stride=2)
+        self.l4 = self._layer(256, 512, n=2, stride=2)
+        self.h = nn.Linear(512, 1)
+
+    def _layer(self, in_c: int, out_c: int, n: int, stride: int) -> nn.Sequential:
+        xs = [BasicBlock(in_c, out_c, stride=stride)]
+        for _ in range(n - 1):
+            xs.append(BasicBlock(out_c, out_c, stride=1))
+        return nn.Sequential(*xs)
+
+    def enc(self, x: torch.Tensor) -> torch.Tensor:
+        x = F.relu(self.b0(self.c0(x)))
+        x = self.p0(x)
+        x = self.l1(x)
+        x = self.l2(x)
+        x = self.l3(x)
+        x = self.l4(x)
+        return F.adaptive_avg_pool2d(x, (1, 1)).flatten(1)  # B,512
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        e = self.enc(x)
+        return self.h(e).squeeze(1)
+
+
 def _collate(batch):
     xs, ys, ids = zip(*batch)
     return torch.stack(xs, 0), torch.stack(ys, 0), list(ids)
 
 
-def _step(net: Net, xb: torch.Tensor) -> torch.Tensor:
-    # xb: B,K,1,H,W -> flatten to B*K
-    b, k = xb.shape[:2]
-    x = xb.view(b * k, *xb.shape[2:])
-    logit = net(x).view(b, k)
-    return logit.mean(1)  # mean over slices
-
-
-def _emb(net: Net, xb: torch.Tensor) -> torch.Tensor:
-    b, k = xb.shape[:2]
-    x = xb.view(b * k, *xb.shape[2:])
-    e = net.enc(x).view(b, k, -1)
-    return e.mean(1)  # B,64
-
-
-def _step_pool(net: Net, xb: torch.Tensor, pool: str) -> torch.Tensor:
+def _step_pool(net: nn.Module, xb: torch.Tensor, pool: str) -> torch.Tensor:
     b, k = xb.shape[:2]
     x = xb.view(b * k, *xb.shape[2:])
     if pool == "lse":
@@ -152,7 +212,7 @@ def _step_pool(net: Net, xb: torch.Tensor, pool: str) -> torch.Tensor:
     return net.h(g).squeeze(1)
 
 
-def _emb_pool(net: Net, xb: torch.Tensor, pool: str) -> torch.Tensor:
+def _emb_pool(net: nn.Module, xb: torch.Tensor, pool: str) -> torch.Tensor:
     b, k = xb.shape[:2]
     x = xb.view(b * k, *xb.shape[2:])
     e = net.enc(x).view(b, k, -1)
@@ -161,7 +221,7 @@ def _emb_pool(net: Net, xb: torch.Tensor, pool: str) -> torch.Tensor:
     return e.max(1).values
 
 
-def _eval(net: Net, dl: DataLoader, dev: torch.device, pool: str) -> tuple[float, float, dict[str, float]]:
+def _eval(net: nn.Module, dl: DataLoader, dev: torch.device, pool: str) -> tuple[float, float, dict[str, float]]:
     net.eval()
     ps = []
     ys = []
@@ -208,6 +268,9 @@ def run_cnn2d(
     pick: str,
     pool: str,
     aug: bool,
+    axis: int,
+    ch: int,
+    arch: str,
 ) -> None:
     con = Console()
     torch.manual_seed(seed)
@@ -230,23 +293,33 @@ def run_cnn2d(
     dva = df[df["id"].isin(va)].copy()
     dte = df[df["id"].isin(te)].copy()
 
-    cfg = Cfg(slices=int(slices), pick=str(pick), pool=str(pool), aug=bool(aug))
+    cfg = Cfg(
+        slices=int(slices),
+        pick=str(pick),
+        pool=str(pool),
+        aug=bool(aug),
+        axis=int(axis),
+        ch=int(ch),
+    )
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    net = Net().to(dev)
+    if arch == "resnet18":
+        net = ResNet18(in_ch=cfg.ch).to(dev)
+    else:
+        net = TinyNet(in_ch=cfg.ch).to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=lr)
 
     dl_tr = DataLoader(Vol2D(dtr, cfg), batch_size=bs, shuffle=True, num_workers=0, collate_fn=_collate)
     # disable augmentation for eval
     dl_va = DataLoader(
-        Vol2D(dva, Cfg(slices=cfg.slices, pick=cfg.pick, aug=False, pool=cfg.pool)),
+        Vol2D(dva, Cfg(slices=cfg.slices, pick=cfg.pick, aug=False, pool=cfg.pool, axis=cfg.axis, ch=cfg.ch)),
         batch_size=bs,
         shuffle=False,
         num_workers=0,
         collate_fn=_collate,
     )
     dl_te = DataLoader(
-        Vol2D(dte, Cfg(slices=cfg.slices, pick=cfg.pick, aug=False, pool=cfg.pool)),
+        Vol2D(dte, Cfg(slices=cfg.slices, pick=cfg.pick, aug=False, pool=cfg.pool, axis=cfg.axis, ch=cfg.ch)),
         batch_size=bs,
         shuffle=False,
         num_workers=0,
@@ -273,6 +346,9 @@ def run_cnn2d(
     t0.add_row("slices", str(cfg.slices))
     t0.add_row("pick", str(cfg.pick))
     t0.add_row("pool", str(cfg.pool))
+    t0.add_row("axis", str(cfg.axis))
+    t0.add_row("ch", str(cfg.ch))
+    t0.add_row("arch", str(arch))
     t0.add_row("pos_weight", f"{pos_w:.3f} (neg={n_neg}, pos={n_pos})")
     t0.add_row("n_tr / n_va / n_te", f"{len(dtr)} / {len(dva)} / {len(dte)}")
     con.print(t0)
@@ -353,6 +429,9 @@ def run_cnn2d(
                 "pick": cfg.pick,
                 "pool": cfg.pool,
                 "slices": int(cfg.slices),
+                "axis": int(cfg.axis),
+                "ch": int(cfg.ch),
+                "arch": str(arch),
                 "pos_weight": float(pos_w),
                 "thr": float(best_thr),
                 "best_epoch": int(best_epoch),
@@ -387,6 +466,29 @@ def run_cnn2d(
     plt.savefig(run_dir / "roc.png", dpi=200)
     plt.close()
 
+    # prediction distribution (by class)
+    plt.figure(figsize=(6.0, 3.6))
+    p0 = te_df[te_df["y"] == 0]["p"].to_numpy()
+    p1 = te_df[te_df["y"] == 1]["p"].to_numpy()
+    plt.hist(p0, bins=20, alpha=0.7, label="y=0")
+    plt.hist(p1, bins=20, alpha=0.7, label="y=1")
+    plt.axvline(best_thr, color="#111", linestyle="--", linewidth=1)
+    plt.xlabel("predicted probability")
+    plt.ylabel("count")
+    plt.title("Prediction distribution (test)")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(run_dir / "pred_dist.png", dpi=200)
+    plt.close()
+
+    ps = {
+        "p_min": float(np.min(p)) if len(p) else float("nan"),
+        "p_mean": float(np.mean(p)) if len(p) else float("nan"),
+        "p_max": float(np.max(p)) if len(p) else float("nan"),
+        "p_std": float(np.std(p)) if len(p) else float("nan"),
+    }
+    (run_dir / "pred_stats.json").write_text(json.dumps(ps, indent=2) + "\n")
+
     # final console summary
     t1 = Table(title="cnn2d results (test)", show_lines=False)
     t1.add_column("metric")
@@ -396,6 +498,7 @@ def run_cnn2d(
     t1.add_row("auc", f"{te_auc:.4f}")
     t1.add_row("bal_acc@0.5", f"{te_bac05:.4f}")
     t1.add_row("bal_acc@thr", f"{te_bac:.4f}")
+    t1.add_row("p_std (test)", f"{ps['p_std']:.6f}")
     con.print(t1)
 
     plt.figure(figsize=(4, 4))

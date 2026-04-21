@@ -9,12 +9,24 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .cnn2d import Cfg, Net, Vol2D, _collate, _emb_pool
+from .cnn2d import Cfg, ResNet18, TinyNet, Vol2D, _collate, _emb_pool
 from .io import read_lines, read_sheet
 from .utils.fp import mk
 
 
-def run_emb2d(index: Path, sheet: Path, splits: Path, weights: Path, out: Path, pool: str = "max") -> None:
+def run_emb2d(
+    index: Path,
+    sheet: Path,
+    splits: Path,
+    weights: Path,
+    out: Path,
+    pool: str = "max",
+    slices: int = 24,
+    pick: str = "topnz",
+    axis: int = 2,
+    ch: int = 1,
+    arch: str = "tiny",
+) -> None:
     idx = pd.read_csv(index)
     sh = read_sheet(sheet).rename(columns={"ID": "id"})
     df = idx.merge(sh, on="id", how="inner")
@@ -30,12 +42,15 @@ def run_emb2d(index: Path, sheet: Path, splits: Path, weights: Path, out: Path, 
     df = df[df["id"].isin(ids)].copy()
 
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net = Net().to(dev)
+    if arch == "resnet18":
+        net = ResNet18(in_ch=int(ch)).to(dev)
+    else:
+        net = TinyNet(in_ch=int(ch)).to(dev)
     sd = torch.load(weights, map_location="cpu")
     net.load_state_dict(sd)
     net.eval()
 
-    cfg = Cfg(pool=pool)
+    cfg = Cfg(pool=pool, slices=int(slices), pick=str(pick), axis=int(axis), ch=int(ch), aug=False)
     dl = DataLoader(Vol2D(df, cfg), batch_size=4, shuffle=False, num_workers=0, collate_fn=_collate)
 
     rows = []
