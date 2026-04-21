@@ -10,6 +10,9 @@ from .cnn2d import run_cnn2d
 from .eda import run_eda
 from .manifest import run_manifest
 from .err import run_err_tab
+from .cal import run_cal
+from .emb2d import run_emb2d
+from .fuse import run_fuse
 
 
 def _p(p: str) -> Path:
@@ -71,6 +74,27 @@ def main() -> None:
     ap_x.add_argument("--errors", required=True, type=_p, help="errors.csv from `obench tab`")
     ap_x.add_argument("--out", required=True, type=_p, help="output dir")
 
+    ap_k = sub.add_parser("cal", help="calibration + uncertainty from predictions (json/csv)")
+    ap_k.add_argument("--pred", required=True, type=_p, help="predictions file: JSON(id->p) or CSV(id,p)")
+    ap_k.add_argument("--sheet", required=True, type=_p, help="oasis_cross-sectional*.xlsx (provides CDR labels)")
+    ap_k.add_argument("--out", required=True, type=_p, help="output dir")
+    ap_k.add_argument("--bins", type=int, default=10)
+
+    ap_b = sub.add_parser("emb2d", help="extract 2D CNN embeddings (for fusion)")
+    ap_b.add_argument("--index", required=True, type=_p)
+    ap_b.add_argument("--sheet", required=True, type=_p)
+    ap_b.add_argument("--splits", required=True, type=_p)
+    ap_b.add_argument("--weights", required=True, type=_p, help="model.pt from `obench cnn2d`")
+    ap_b.add_argument("--out", required=True, type=_p, help="output CSV (id,y,e0..e63)")
+
+    ap_f = sub.add_parser("fuse", help="fusion baseline (tabular + 2D CNN embedding)")
+    ap_f.add_argument("--index", required=True, type=_p)
+    ap_f.add_argument("--sheet", required=True, type=_p)
+    ap_f.add_argument("--emb", required=True, type=_p, help="embedding CSV from `obench emb2d`")
+    ap_f.add_argument("--splits", required=True, type=_p)
+    ap_f.add_argument("--out", required=True, type=_p)
+    ap_f.add_argument("--model", choices=["mlp", "logreg"], default="mlp")
+
     a = ap.parse_args()
 
     if a.cmd == "index":
@@ -93,6 +117,15 @@ def main() -> None:
         return
     if a.cmd == "errtab":
         run_err_tab(errors=a.errors, out=a.out)
+        return
+    if a.cmd == "cal":
+        run_cal(pred=a.pred, sheet=a.sheet, out=a.out, bins=a.bins)
+        return
+    if a.cmd == "emb2d":
+        run_emb2d(index=a.index, sheet=a.sheet, splits=a.splits, weights=a.weights, out=a.out)
+        return
+    if a.cmd == "fuse":
+        run_fuse(index=a.index, sheet=a.sheet, emb=a.emb, splits=a.splits, out=a.out, model=a.model)
         return
 
     raise SystemExit(f"unknown cmd: {a.cmd}")

@@ -24,6 +24,7 @@ Can dementia-related signal in OASIS-1 (label: `CDR>0` vs `CDR=0`) be predicted 
 |---|---|---:|---:|
 | Logistic regression | age/sex/hand + Educ/SES + eTIV/nWBV/ASF | 0.667 | 0.583 |
 | 2D CNN | processed MRI (`T88_111/*_t88_masked_gfc`) | 0.167 | 0.500 |
+| Fusion (log-reg) | tabular + 2D CNN embedding | 0.667 | 0.583 |
 
 ![Tabular ROC](docs/img/roc.png)
 
@@ -36,6 +37,8 @@ On very small OASIS-1 subsets, **clinical + morphometric features provide a stro
 - A leakage-aware, benchmark-style pipeline (index → manifest → subject splits → baselines → error analysis).
 - A first-class manifest (`index.csv`/`manifest.csv`) so experiments are “dataset-like”, not script-like.
 - Baselines that make the comparison explicit: tabular (structured) vs image (processed MRI).
+- A simple multimodal fusion baseline (tabular + image embedding) to test whether MRI adds value beyond structured features.
+- Calibration + uncertainty plots (reliability diagram, confidence, entropy) to support “trustworthy AI” analysis.
 
 ## Pipeline (high level)
 
@@ -164,6 +167,40 @@ Trains a small 2D CNN on slices from the canonical processed volume (`T88_111/*_
 
 ```bash
 uv run obench cnn2d --index data/interim/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --splits splits/oasis1 --out reports/cnn2d
+```
+
+## 4.5) Calibration / uncertainty (simple)
+
+Tabular model calibration from `errors.csv`:
+
+```bash
+uv run obench cal --pred reports/tab/run/errors.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --out reports/cal/tab
+```
+
+CNN calibration from `pred.json`:
+
+```bash
+uv run obench cal --pred reports/cnn2d/run/pred.json --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --out reports/cal/cnn2d
+```
+
+Example plots committed:
+
+![Tab reliability](docs/img/tab_reliability.png)
+
+## 5) Fusion baseline (tabular + CNN embedding)
+
+1) Train the 2D CNN to produce `reports/cnn2d/run/model.pt`.
+
+2) Extract per-subject embeddings:
+
+```bash
+uv run obench emb2d --index data/interim/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --splits splits/oasis1 --weights reports/cnn2d/run/model.pt --out reports/emb/emb2d.csv
+```
+
+3) Train fusion:
+
+```bash
+uv run obench fuse --index data/interim/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --emb reports/emb/emb2d.csv --splits splits/oasis1 --out reports/fuse --model logreg
 ```
 
 ## Notes on labels

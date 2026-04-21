@@ -62,15 +62,18 @@ class Net(nn.Module):
         self.c3 = nn.Conv2d(32, 64, 3, padding=1)
         self.h = nn.Linear(64, 1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def enc(self, x: torch.Tensor) -> torch.Tensor:
         # x: B*K,1,H,W
         x = F.relu(self.c1(x))
         x = F.max_pool2d(x, 2)
         x = F.relu(self.c2(x))
         x = F.max_pool2d(x, 2)
         x = F.relu(self.c3(x))
-        x = F.adaptive_avg_pool2d(x, (1, 1)).flatten(1)
-        return self.h(x).squeeze(1)
+        return F.adaptive_avg_pool2d(x, (1, 1)).flatten(1)  # B*K,64
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        e = self.enc(x)
+        return self.h(e).squeeze(1)
 
 
 def _collate(batch):
@@ -84,6 +87,13 @@ def _step(net: Net, xb: torch.Tensor) -> torch.Tensor:
     x = xb.view(b * k, *xb.shape[2:])
     logit = net(x).view(b, k)
     return logit.mean(1)  # mean over slices
+
+
+def _emb(net: Net, xb: torch.Tensor) -> torch.Tensor:
+    b, k = xb.shape[:2]
+    x = xb.view(b * k, *xb.shape[2:])
+    e = net.enc(x).view(b, k, -1)
+    return e.mean(1)  # B,64
 
 
 def _eval(net: Net, dl: DataLoader, dev: torch.device) -> tuple[float, float, dict[str, float]]:
