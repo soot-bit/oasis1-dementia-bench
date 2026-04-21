@@ -48,6 +48,8 @@ On very small OASIS-1 subsets, **clinical + morphometric features provide a stro
 
 Conclusion (current snapshot): on `disc1`, the image baseline and fusion do not yet beat tabular; scaling to all discs is the next step before drawing strong conclusions.
 
+CNN sanity check (common pitfall on tiny test sets): if `obench cal` reports very small `p_std` (nearly-constant probabilities) and `auc_flip >> auc`, the model is effectively not separating classes and the AUC ranking may look “inverted” due to tiny jitter. Treat `auc_flip` as a diagnostic, not as a score to report.
+
 ## Main contribution
 
 - A leakage-aware, benchmark-style pipeline (index → manifest → subject splits → baselines → error analysis).
