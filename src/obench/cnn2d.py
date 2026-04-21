@@ -26,6 +26,7 @@ class Cfg:
     slices: int = 24  # per volume (evenly spaced)
     pick: str = "topnz"  # topnz|lin
     aug: bool = True
+    pool: str = "max"  # mean|max
 
 
 def _y(df: pd.DataFrame) -> np.ndarray:
@@ -54,6 +55,10 @@ def _pick_slices(a: np.ndarray, k: int, mode: str) -> np.ndarray:
 def _aug(x: torch.Tensor) -> torch.Tensor:
     # x: K,1,H,W (float32)
     # light, label-preserving intensity/noise aug
+    if torch.rand(()) < 0.5:
+        x = torch.flip(x, dims=[-1])  # left-right
+    if torch.rand(()) < 0.2:
+        x = torch.flip(x, dims=[-2])  # up-down (small prob)
     if torch.rand(()) < 0.9:
         s = 0.90 + 0.20 * torch.rand(())
         x = x * s
@@ -131,7 +136,27 @@ def _emb(net: Net, xb: torch.Tensor) -> torch.Tensor:
     return e.mean(1)  # B,64
 
 
-def _eval(net: Net, dl: DataLoader, dev: torch.device) -> tuple[float, float, dict[str, float]]:
+def _step_pool(net: Net, xb: torch.Tensor, pool: str) -> torch.Tensor:
+    b, k = xb.shape[:2]
+    x = xb.view(b * k, *xb.shape[2:])
+    e = net.enc(x).view(b, k, -1)
+    if pool == "mean":
+        g = e.mean(1)
+    else:
+        g = e.max(1).values
+    return net.h(g).squeeze(1)
+
+
+def _emb_pool(net: Net, xb: torch.Tensor, pool: str) -> torch.Tensor:
+    b, k = xb.shape[:2]
+    x = xb.view(b * k, *xb.shape[2:])
+    e = net.enc(x).view(b, k, -1)
+    if pool == "mean":
+        return e.mean(1)
+    return e.max(1).values
+
+
+def _eval(net: Net, dl: DataLoader, dev: torch.device, pool: str) -> tuple[float, float, dict[str, float]]:
     net.eval()
     ps = []
     ys = []
@@ -139,7 +164,7 @@ def _eval(net: Net, dl: DataLoader, dev: torch.device) -> tuple[float, float, di
     with torch.no_grad():
         for xb, yb, idb in dl:
             xb = xb.to(dev)
-            logit = _step(net, xb)
+            logit = _step_pool(net, xb, pool=pool)
             p = torch.sigmoid(logit).cpu().numpy()
             ps.append(p)
             ys.append(yb.numpy())
@@ -155,10 +180,9 @@ def _best_thr(y: np.ndarray, p: np.ndarray) -> float:
     # pick threshold that maximizes balanced accuracy on validation
     if len(p) == 0:
         return 0.5
-    xs = np.unique(p)
-    # add edges
-    xs = np.unique(np.concatenate(([0.0], xs, [1.0])))
-    best = (0.5, -1.0)
+    # avoid overfitting to tiny float jitter: coarse grid only
+    xs = np.linspace(0.1, 0.9, 17)
+    best = (0.5, balanced_accuracy_score(y, (p >= 0.5).astype(int)))
     for t in xs:
         bac = balanced_accuracy_score(y, (p >= t).astype(int))
         if bac > best[1]:
@@ -196,8 +220,20 @@ def run_cnn2d(index: Path, sheet: Path, splits: Path, out: Path, seed: int, epoc
 
     dl_tr = DataLoader(Vol2D(dtr, cfg), batch_size=bs, shuffle=True, num_workers=0, collate_fn=_collate)
     # disable augmentation for eval
-    dl_va = DataLoader(Vol2D(dva, Cfg(slices=cfg.slices, pick=cfg.pick, aug=False)), batch_size=bs, shuffle=False, num_workers=0, collate_fn=_collate)
-    dl_te = DataLoader(Vol2D(dte, Cfg(slices=cfg.slices, pick=cfg.pick, aug=False)), batch_size=bs, shuffle=False, num_workers=0, collate_fn=_collate)
+    dl_va = DataLoader(
+        Vol2D(dva, Cfg(slices=cfg.slices, pick=cfg.pick, aug=False, pool=cfg.pool)),
+        batch_size=bs,
+        shuffle=False,
+        num_workers=0,
+        collate_fn=_collate,
+    )
+    dl_te = DataLoader(
+        Vol2D(dte, Cfg(slices=cfg.slices, pick=cfg.pick, aug=False, pool=cfg.pool)),
+        batch_size=bs,
+        shuffle=False,
+        num_workers=0,
+        collate_fn=_collate,
+    )
 
     ytr = dtr["y"].to_numpy(dtype=int)
     n_pos = int((ytr == 1).sum())
@@ -218,6 +254,7 @@ def run_cnn2d(index: Path, sheet: Path, splits: Path, out: Path, seed: int, epoc
     t0.add_row("lr", str(lr))
     t0.add_row("slices", str(cfg.slices))
     t0.add_row("pick", str(cfg.pick))
+    t0.add_row("pool", str(cfg.pool))
     t0.add_row("pos_weight", f"{pos_w:.3f} (neg={n_neg}, pos={n_pos})")
     t0.add_row("n_tr / n_va / n_te", f"{len(dtr)} / {len(dva)} / {len(dte)}")
     con.print(t0)
@@ -229,20 +266,24 @@ def run_cnn2d(index: Path, sheet: Path, splits: Path, out: Path, seed: int, epoc
         for xb, yb, _ in tqdm(dl_tr, desc="train", leave=False):
             xb = xb.to(dev)
             yb = yb.to(dev).float()
-            logit = _step(net, xb)
+            logit = _step_pool(net, xb, pool=cfg.pool)
             loss = F.binary_cross_entropy_with_logits(logit, yb, pos_weight=pos_w_t)
             opt.zero_grad()
             loss.backward()
             opt.step()
             tr_loss.append(float(loss.detach().cpu().item()))
 
-        auc, bac05, va_p = _eval(net, dl_va, dev)
+        auc, bac05, va_p = _eval(net, dl_va, dev, pool=cfg.pool)
         va_df = pd.DataFrame([{"id": k, "p": float(v)} for k, v in va_p.items()])
         va_df = va_df.merge(dva[["id", "y"]], on="id", how="inner")
         v_y = va_df["y"].to_numpy(dtype=int)
         v_p = va_df["p"].to_numpy(dtype=float)
-        thr = _best_thr(v_y, v_p)
-        bac = float(balanced_accuracy_score(v_y, (v_p >= thr).astype(int))) if len(v_y) else float("nan")
+        if len(v_p) and float(np.std(v_p)) < 1e-3:
+            thr = 0.5
+            bac = float(bac05)
+        else:
+            thr = _best_thr(v_y, v_p)
+            bac = float(balanced_accuracy_score(v_y, (v_p >= thr).astype(int))) if len(v_y) else float("nan")
         va_ps = np.array(list(va_p.values()), dtype=float) if va_p else np.array([], dtype=float)
         hist.append(
             {
@@ -270,7 +311,7 @@ def run_cnn2d(index: Path, sheet: Path, splits: Path, out: Path, seed: int, epoc
     if best["state"] is not None:
         net.load_state_dict(best["state"])
 
-    te_auc, te_bac05, te_p = _eval(net, dl_te, dev)
+    te_auc, te_bac05, te_p = _eval(net, dl_te, dev, pool=cfg.pool)
     te_df = pd.DataFrame([{"id": k, "p": float(v)} for k, v in te_p.items()])
     te_df = te_df.merge(dte[["id", "y"]], on="id", how="inner")
     te_y = te_df["y"].to_numpy(dtype=int)
@@ -292,6 +333,7 @@ def run_cnn2d(index: Path, sheet: Path, splits: Path, out: Path, seed: int, epoc
                 "bs": int(bs),
                 "lr": float(lr),
                 "pick": cfg.pick,
+                "pool": cfg.pool,
                 "slices": int(cfg.slices),
                 "pos_weight": float(pos_w),
                 "thr": float(best_thr),

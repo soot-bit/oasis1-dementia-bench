@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .cnn2d import Cfg, Net, Vol2D, _collate, _emb
+from .cnn2d import Cfg, Net, Vol2D, _collate, _emb_pool
 from .io import read_lines, read_sheet
 from .utils.fp import mk
 
@@ -42,10 +42,9 @@ def run_emb2d(index: Path, sheet: Path, splits: Path, weights: Path, out: Path) 
     with torch.no_grad():
         for xb, yb, idb in tqdm(dl, desc="emb2d"):
             xb = xb.to(dev)
-            e = _emb(net, xb).cpu().numpy()  # B,64
+            e = _emb_pool(net, xb, pool=cfg.pool).cpu().numpy()  # B,64
             for i, sid in enumerate(idb):
                 rows.append({"id": sid, "y": int(yb[i].item()), **{f"e{i2}": float(e[i, i2]) for i2 in range(e.shape[1])}})
 
     out_p = mk(out.parent)
     pd.DataFrame(rows).sort_values("id").to_csv(out, index=False)
-
