@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.crdownload
+.~lock*
+*.egg-info/
+
+data/interim/
+data/processed/
+reports/
+runs/
+
+splits/
+
+# never commit raw dataset artifacts (keep only the small README)
+data/raw/oasis1/*
+!data/raw/oasis1/README.md
