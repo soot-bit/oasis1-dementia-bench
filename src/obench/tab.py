@@ -22,6 +22,8 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
+from .bayes import auc_bb_ci
+from .bayes import cls_ci
 from .io import read_lines, read_sheet
 from .utils.fp import mk
 
@@ -144,16 +146,53 @@ def _imp_rows(pipe: Pipeline, cfg: TabCfg, fold: int, model: str) -> list[dict[s
     return [{"model": model, "fold": fold, "feature": f, "importance": float(v)} for f, v in zip(feat, imp, strict=True)]
 
 
+def _metric_row(name: str, disp: str, y: np.ndarray, p: np.ndarray, seed: int) -> tuple[dict[str, object], dict[str, object]]:
+    auc = float(roc_auc_score(y, p)) if len(np.unique(y)) > 1 else float("nan")
+    yhat = (p >= 0.5).astype(int)
+    bac = float(balanced_accuracy_score(y, yhat))
+    brier = float(np.mean((p - y) ** 2))
+    cls = cls_ci(y=y, p=p, thr=0.5, seed=seed)
+    auc_ci = auc_bb_ci(y=y, p=p, seed=seed)
+    row = {
+        "model": name,
+        "name": disp,
+        "auc": auc,
+        "auc_bb_mid": auc_ci["mid"],
+        "auc_bb_lo": auc_ci["lo"],
+        "auc_bb_hi": auc_ci["hi"],
+        "bal_acc": bac,
+        "bal_acc_mid": cls["bal_acc"]["mid"],
+        "bal_acc_lo": cls["bal_acc"]["lo"],
+        "bal_acc_hi": cls["bal_acc"]["hi"],
+        "brier": brier,
+        "sens": cls["sens"]["point"],
+        "sens_lo": cls["sens"]["lo"],
+        "sens_hi": cls["sens"]["hi"],
+        "spec": cls["spec"]["point"],
+        "spec_lo": cls["spec"]["lo"],
+        "spec_hi": cls["spec"]["hi"],
+        "n_test": int(len(y)),
+    }
+    met = {
+        "auc": auc,
+        "bal_acc": bac,
+        "brier": brier,
+        "bayes": {
+            "auc_bb": auc_ci,
+            "cls": cls,
+        },
+    }
+    return row, met
+
+
 def run_tab(index: Path, sheet: Path, splits: Path, out: Path) -> None:
     cfg = TabCfg()
     df = _load(index=index, sheet=sheet, cfg=cfg)
 
     tr = read_lines(splits / "train.txt")
-    va = read_lines(splits / "val.txt")
     te = read_lines(splits / "test.txt")
 
     dtr = _subset(df, tr)
-    dva = _subset(df, va)
     dte = _subset(df, te)
 
     feats = list(cfg.num + cfg.cat)
@@ -162,13 +201,14 @@ def run_tab(index: Path, sheet: Path, splits: Path, out: Path) -> None:
     run_dir = mk(out / "run")
     rows = []
 
-    for name, disp in MODELS:
-        _, te_p, auc, bac = _fit_eval(name=name, cfg=cfg, feats=feats, dtr=dtr, dte=dte)
-        rows.append({"model": name, "name": disp, "auc": auc, "bal_acc": bac, "n_test": int(len(dte))})
+    for i, (name, disp) in enumerate(MODELS, start=1):
+        _, te_p, _, _ = _fit_eval(name=name, cfg=cfg, feats=feats, dtr=dtr, dte=dte)
+        row, met = _metric_row(name=name, disp=disp, y=yte, p=te_p, seed=7 + i)
+        rows.append(row)
 
         # keep the original "run/" outputs as the logreg artefacts for downstream tooling
         out_dir = run_dir if name == "logreg" else mk(run_dir / name)
-        (out_dir / "metrics.json").write_text(json.dumps({"auc": auc, "bal_acc": bac}, indent=2) + "\n")
+        (out_dir / "metrics.json").write_text(json.dumps(met, indent=2) + "\n")
 
         plt.figure(figsize=(5, 4))
         RocCurveDisplay.from_predictions(yte, te_p)
@@ -227,6 +267,7 @@ def run_tabcv(index: Path, sheet: Path, out: Path, folds: int = 5, seed: int = 7
     fold_rows: list[dict[str, object]] = []
     coef_rows: list[dict[str, object]] = []
     imp_rows: list[dict[str, object]] = []
+    oof_rows: list[dict[str, object]] = []
 
     for fold, (tr_ix, te_ix) in enumerate(split.split(df["subj"], y), start=1):
         dtr = df.iloc[tr_ix].copy()
@@ -248,6 +289,17 @@ def run_tabcv(index: Path, sheet: Path, out: Path, folds: int = 5, seed: int = 7
                     "brier": brier,
                 }
             )
+            oof_rows.extend(
+                {
+                    "model": name,
+                    "name": disp,
+                    "fold": fold,
+                    "id": sid,
+                    "y": int(yy),
+                    "p": float(pp),
+                }
+                for sid, yy, pp in zip(dte["id"].tolist(), yte.tolist(), te_p.tolist(), strict=True)
+            )
             if name == "logreg":
                 coef_rows.extend(_coef_rows(pipe=pipe, cfg=cfg, fold=fold))
             else:
@@ -255,6 +307,8 @@ def run_tabcv(index: Path, sheet: Path, out: Path, folds: int = 5, seed: int = 7
 
     fold_df = pd.DataFrame(fold_rows).sort_values(["model", "fold"])
     fold_df.to_csv(run_dir / "fold_metrics.csv", index=False)
+    oof_df = pd.DataFrame(oof_rows).sort_values(["model", "fold", "id"])
+    oof_df.to_csv(run_dir / "oof_pred.csv", index=False)
 
     summ = (
         fold_df.groupby(["model", "name"], as_index=False)
@@ -266,10 +320,37 @@ def run_tabcv(index: Path, sheet: Path, out: Path, folds: int = 5, seed: int = 7
             brier_mean=("brier", "mean"),
             brier_std=("brier", "std"),
         )
-        .sort_values("auc_mean", ascending=False)
     )
+    pooled = []
+    pooled_json: dict[str, dict[str, object]] = {}
+    for i, (name, disp) in enumerate(MODELS, start=1):
+        one = oof_df[oof_df["model"] == name].copy()
+        row, met = _metric_row(name=name, disp=disp, y=one["y"].to_numpy(dtype=int), p=one["p"].to_numpy(dtype=float), seed=seed + 100 + i)
+        pooled.append(
+            {
+                "model": name,
+                "auc_pool": row["auc"],
+                "auc_bb_mid": row["auc_bb_mid"],
+                "auc_bb_lo": row["auc_bb_lo"],
+                "auc_bb_hi": row["auc_bb_hi"],
+                "bal_acc_pool": row["bal_acc"],
+                "bal_acc_mid": row["bal_acc_mid"],
+                "bal_acc_lo": row["bal_acc_lo"],
+                "bal_acc_hi": row["bal_acc_hi"],
+                "brier_pool": row["brier"],
+                "sens_pool": row["sens"],
+                "sens_lo": row["sens_lo"],
+                "sens_hi": row["sens_hi"],
+                "spec_pool": row["spec"],
+                "spec_lo": row["spec_lo"],
+                "spec_hi": row["spec_hi"],
+            }
+        )
+        pooled_json[name] = met
+    summ = summ.merge(pd.DataFrame(pooled), on="model", how="left").sort_values("auc_mean", ascending=False)
     summ.to_csv(run_dir / "summary.csv", index=False)
     (run_dir / "summary.json").write_text(json.dumps(summ.to_dict(orient="records"), indent=2) + "\n")
+    (run_dir / "pooled_metrics.json").write_text(json.dumps(pooled_json, indent=2) + "\n")
 
     coef_df = pd.DataFrame(coef_rows)
     if not coef_df.empty:

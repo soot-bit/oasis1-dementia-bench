@@ -28,6 +28,10 @@ class CnnJob:
 
 
 def _preset(name: str) -> list[CnnJob]:
+    if name == "best":
+        return [
+            CnnJob(name="coronal3_tiny_mean", axis=1, ch=3, arch="tiny", pool="mean", pick="topnz", slices=24, bs=8, lr=3e-4),
+        ]
     if name == "quick":
         return [
             CnnJob(name="axial1_tiny", axis=2, ch=1, arch="tiny", pool="max", pick="topnz", slices=24, bs=8, lr=1e-3),
@@ -115,8 +119,12 @@ def run_benchcnn(
                 "lr": j.lr,
                 "epochs": epochs,
                 "auc": met["auc"],
+                "auc_bb_lo": met["bayes"]["auc_bb"]["lo"],
+                "auc_bb_hi": met["bayes"]["auc_bb"]["hi"],
                 "bal_acc": met["bal_acc"],
                 "bal_acc05": met["bal_acc05"],
+                "bal_acc_lo": met["bayes"]["cls_thr"]["bal_acc"]["lo"],
+                "bal_acc_hi": met["bayes"]["cls_thr"]["bal_acc"]["hi"],
                 "thr": met["thr"],
                 "p_std": pred["p_std"],
                 "brier": cal["brier"],
@@ -142,4 +150,3 @@ def run_benchcnn(
             f"{float(r['ece']):.4f}",
         )
     con.print(t1)
-

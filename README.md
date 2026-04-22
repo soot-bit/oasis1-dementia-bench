@@ -46,11 +46,17 @@ Example snapshot (disc1 only, for illustration):
 
 Subject-level cross-validation (3 discs):
 
-| Model               | ROC-AUC (mean ± std) | Balanced Acc    | Brier |
-| ------------------- | -------------------- | --------------- | ----- |
-| Logistic Regression | **0.80 ± 0.14**      | **0.72 ± 0.11** | 0.186 |
-| Random Forest       | 0.81 ± 0.12          | 0.68 ± 0.14     | 0.183 |
-| Gradient Boosting   | 0.78 ± 0.09          | 0.67 ± 0.04     | 0.278 |
+| Model               | ROC-AUC (mean ± std) | AUC pooled 95% CrI | Bal Acc pooled 95% CrI | Brier |
+| ------------------- | -------------------- | ------------------ | ---------------------- | ----- |
+| Logistic Regression | **0.80 ± 0.14**      | 0.79 [0.68, 0.89]  | **0.71 [0.59, 0.80]**  | 0.186 |
+| Random Forest       | 0.81 ± 0.12          | 0.79 [0.68, 0.88]  | 0.68 [0.56, 0.77]      | 0.183 |
+| Gradient Boosting   | 0.78 ± 0.09          | 0.78 [0.67, 0.87]  | 0.67 [0.55, 0.77]      | 0.278 |
+
+Bayesian intervals above are computed from pooled out-of-fold predictions:
+
+* `logistic regression`: sensitivity `0.68 [0.50, 0.82]`, specificity `0.74 [0.59, 0.86]`
+* `random forest`: sensitivity `0.71 [0.53, 0.84]`, specificity `0.64 [0.49, 0.78]`
+* `gradient boosting`: sensitivity `0.61 [0.44, 0.77]`, specificity `0.72 [0.57, 0.84]`
 
 Single-split snapshot (n=14 test subjects, for illustration only):
 
@@ -81,11 +87,17 @@ Representative single-split plots from the latest tabular run:
   * strong ROC-AUC
   * stable balanced accuracy
   * better calibration than tree models
+  * strongest pooled Bayesian interval profile
 * Random forest shows **perfect ranking on some splits**, but poorer calibration and threshold stability
 * Errors concentrate on **older nondemented controls**, indicating:
 
   * the model learns age/atrophy signal
   * but struggles to separate ageing from pathology
+* Dominant features are consistent across models:
+
+  * `nWBV` is the strongest feature
+  * `Educ` is the next strongest linear signal
+  * `Age` is the clearest secondary tree-based driver
 
 👉 MRI models must beat this baseline **under the same split** to be meaningful.
 
@@ -105,6 +117,7 @@ A 2D CNN on processed MRI shows:
 
 * AUC ≈ 0.65 (ranking signal exists)
 * Balanced accuracy ≈ 0.50 (poor separation)
+* wide uncertainty intervals on small test sets, so weak CNN gains should not be trusted without interval-aware reporting
 
 Common failure mode:
 
@@ -115,6 +128,25 @@ Common failure mode:
 
 * input design is critical (slice choice, orientation)
 * naive 2D models are insufficient
+* the image baseline should be treated as a weak reference, not a competitive model yet
+
+CNN outputs now include:
+
+* Bayesian-bootstrap `ROC-AUC` intervals
+* credible intervals for `sensitivity`, `specificity`, and `balanced accuracy`
+
+Recommended current MRI baseline entrypoint, run in a separate shell:
+
+```bash
+bash scripts/bench_cnn_best.sh
+```
+
+This runs the current fixed small-model candidate:
+
+* coronal slices
+* 2.5D (`ch=3`)
+* `tiny` architecture
+* mean slice pooling
 
 ---
 
@@ -189,6 +221,4 @@ bash scripts/bench_tab.sh
 ```bash
 uv run obench cnn2d ...
 ```
-
-
 

@@ -6,7 +6,21 @@ import nibabel as nib
 import numpy as np
 
 
+def fix_img(img: Path) -> Path:
+    if img.exists():
+        return img
+    s = img.as_posix()
+    old = "data/interim/oasis1/"
+    new = "data/oasis1/"
+    if s.startswith(old):
+        alt = Path(new + s[len(old):])
+        if alt.exists():
+            return alt
+    return img
+
+
 def load_analyze(img: Path) -> np.ndarray:
+    img = fix_img(img)
     if img.suffix != ".img":
         raise ValueError(f"expected .img, got {img}")
     x = nib.load(str(img))

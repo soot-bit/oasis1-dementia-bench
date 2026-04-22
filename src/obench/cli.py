@@ -122,7 +122,7 @@ def main() -> None:
     ap_q.add_argument("--sheet", required=True, type=_p)
     ap_q.add_argument("--splits", required=True, type=_p)
     ap_q.add_argument("--out", required=True, type=_p)
-    ap_q.add_argument("--preset", choices=["quick", "gpu"], default="gpu")
+    ap_q.add_argument("--preset", choices=["best", "quick", "gpu"], default="gpu")
     ap_q.add_argument("--epochs", type=int, default=20)
     ap_q.add_argument("--seed", type=int, default=7)
     ap_q.add_argument("--limit", type=int)

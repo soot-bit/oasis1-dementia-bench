@@ -18,6 +18,8 @@ from rich.console import Console
 from rich.table import Table
 import math
 
+from .bayes import auc_bb_ci
+from .bayes import cls_ci
 from .io import read_lines, read_sheet
 from .utils.fp import mk
 from .utils.img import load_analyze, zscore_brain
@@ -255,6 +257,24 @@ def _best_thr(y: np.ndarray, p: np.ndarray) -> float:
     return float(best[0])
 
 
+def _met(y: np.ndarray, p: np.ndarray, thr: float, seed: int) -> dict[str, object]:
+    auc = float(roc_auc_score(y, p)) if len(np.unique(y)) > 1 else float("nan")
+    bac = float(balanced_accuracy_score(y, (p >= thr).astype(int))) if len(y) else float("nan")
+    bac05 = float(balanced_accuracy_score(y, (p >= 0.5).astype(int))) if len(y) else float("nan")
+    brier = float(np.mean((p - y) ** 2)) if len(y) else float("nan")
+    return {
+        "auc": auc,
+        "bal_acc": bac,
+        "bal_acc05": bac05,
+        "brier": brier,
+        "bayes": {
+            "auc_bb": auc_bb_ci(y=y, p=p, seed=seed),
+            "cls_thr": cls_ci(y=y, p=p, thr=thr, seed=seed),
+            "cls_05": cls_ci(y=y, p=p, thr=0.5, seed=seed + 1),
+        },
+    }
+
+
 def run_cnn2d(
     index: Path,
     sheet: Path,
@@ -411,15 +431,12 @@ def run_cnn2d(
     te_y = te_df["y"].to_numpy(dtype=int)
     te_pv = te_df["p"].to_numpy(dtype=float)
     te_bac = float(balanced_accuracy_score(te_y, (te_pv >= best_thr).astype(int))) if len(te_y) else float("nan")
+    met = _met(y=te_y, p=te_pv, thr=best_thr, seed=seed)
 
     run_dir = mk(out / "run")
-    (run_dir / "metrics.json").write_text(
-        json.dumps(
-            {"auc": te_auc, "bal_acc": te_bac, "bal_acc05": te_bac05, "thr": best_thr, "dev": str(dev)},
-            indent=2,
-        )
-        + "\n"
-    )
+    met["thr"] = float(best_thr)
+    met["dev"] = str(dev)
+    (run_dir / "metrics.json").write_text(json.dumps(met, indent=2) + "\n")
     (run_dir / "train.json").write_text(
         json.dumps(
             {
@@ -496,8 +513,10 @@ def run_cnn2d(
     t1.add_row("best_epoch", str(best_epoch))
     t1.add_row("thr (val)", f"{best_thr:.4f}")
     t1.add_row("auc", f"{te_auc:.4f}")
+    t1.add_row("auc 95% CrI", f"{met['bayes']['auc_bb']['lo']:.4f} .. {met['bayes']['auc_bb']['hi']:.4f}")
     t1.add_row("bal_acc@0.5", f"{te_bac05:.4f}")
     t1.add_row("bal_acc@thr", f"{te_bac:.4f}")
+    t1.add_row("bal_acc 95% CrI", f"{met['bayes']['cls_thr']['bal_acc']['lo']:.4f} .. {met['bayes']['cls_thr']['bal_acc']['hi']:.4f}")
     t1.add_row("p_std (test)", f"{ps['p_std']:.6f}")
     con.print(t1)
 
