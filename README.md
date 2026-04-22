@@ -65,7 +65,7 @@ Single-split snapshot (n=14 test subjects, for illustration only):
 | Logistic regression | tabular    |         0.979 |        0.875 | 0.117 | 0.176 |
 | Random forest       | tabular    |         1.000 |        0.750 | 0.125 | 0.291 |
 | Gradient boosting   | tabular    |         0.833 |        0.812 | 0.199 | 0.208 |
-| 2D CNN              | MRI        | 0.65 (approx) |         0.50 |     — |     — |
+| 2D CNN              | MRI        |           WIP |          WIP |     — |     — |
 | Fusion              | multimodal |           WIP |          WIP |     — |     — |
 
 Representative single-split plots from the latest tabular run:
@@ -115,9 +115,9 @@ Representative single-split plots from the latest tabular run:
 
 A 2D CNN on processed MRI shows:
 
-* AUC ≈ 0.65 (ranking signal exists)
-* Balanced accuracy ≈ 0.50 (poor separation)
-* wide uncertainty intervals on small test sets, so weak CNN gains should not be trusted without interval-aware reporting
+* unstable ranking signal depending on configuration
+* balanced accuracy near chance on current small-sample runs
+* wide uncertainty intervals, so weak CNN gains should not be trusted without interval-aware reporting
 
 Common failure mode:
 
@@ -134,6 +134,14 @@ CNN outputs now include:
 
 * Bayesian-bootstrap `ROC-AUC` intervals
 * credible intervals for `sensitivity`, `specificity`, and `balanced accuracy`
+
+Current fixed small-model smoke run (`coronal3_tiny_mean`, 1 epoch):
+
+* ROC-AUC `0.54 [0.21, 0.83]`
+* balanced accuracy `0.50 [0.35, 0.61]`
+* `p_std = 0.00030`, indicating near-constant predictions even in the recommended small-model setting
+
+That smoke result is included to show uncertainty-aware reporting, not as a final MRI benchmark.
 
 Recommended current MRI baseline entrypoint, run in a separate shell:
 
@@ -221,4 +229,3 @@ bash scripts/bench_tab.sh
 ```bash
 uv run obench cnn2d ...
 ```
-
