@@ -3,8 +3,8 @@
 This page summarizes false positives / false negatives from `errors.csv` produced by `obench tab`.
 
 ## Summary
-- n: 5
-- tags: {'ok': 3, 'fp': 1, 'fn': 1}
+- n: 14
+- tags: {'ok': 12, 'fp': 2}
 
 ## Plots
 - `age_by_tag.png`: age distribution for FP/FN/OK

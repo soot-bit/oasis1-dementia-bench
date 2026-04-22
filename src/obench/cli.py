@@ -6,6 +6,7 @@ from pathlib import Path
 from .index import run_index
 from .split import run_split
 from .tab import run_tab
+from .tab import run_tabcv
 from .cnn2d import run_cnn2d
 from .eda import run_eda
 from .manifest import run_manifest
@@ -48,6 +49,13 @@ def main() -> None:
     ap_t.add_argument("--sheet", required=True, type=_p)
     ap_t.add_argument("--splits", required=True, type=_p)
     ap_t.add_argument("--out", required=True, type=_p)
+
+    ap_tc = sub.add_parser("tabcv", help="subject-level cross-validation for classical tabular baselines")
+    ap_tc.add_argument("--index", required=True, type=_p)
+    ap_tc.add_argument("--sheet", required=True, type=_p)
+    ap_tc.add_argument("--out", required=True, type=_p)
+    ap_tc.add_argument("--folds", type=int, default=5)
+    ap_tc.add_argument("--seed", type=int, default=7)
 
     ap_c = sub.add_parser("cnn2d", help="2D CNN baseline from processed MRI (run in separate shell)")
     ap_c.add_argument("--index", required=True, type=_p)
@@ -129,6 +137,9 @@ def main() -> None:
         return
     if a.cmd == "tab":
         run_tab(index=a.index, sheet=a.sheet, splits=a.splits, out=a.out)
+        return
+    if a.cmd == "tabcv":
+        run_tabcv(index=a.index, sheet=a.sheet, out=a.out, folds=a.folds, seed=a.seed)
         return
     if a.cmd == "cnn2d":
         run_cnn2d(

@@ -18,6 +18,7 @@ from sklearn.metrics import (
     balanced_accuracy_score,
     roc_auc_score,
 )
+from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -30,6 +31,13 @@ class TabCfg:
     # keep explicit + small
     num: tuple[str, ...] = ("Age", "Educ", "SES", "eTIV", "nWBV", "ASF")
     cat: tuple[str, ...] = ("M/F", "Hand")
+
+
+MODELS: tuple[tuple[str, str], ...] = (
+    ("logreg", "logistic regression"),
+    ("rf", "random forest"),
+    ("gb", "gradient boosting"),
+)
 
 
 def _y(df: pd.DataFrame) -> np.ndarray:
@@ -93,16 +101,52 @@ def _subset(df: pd.DataFrame, ids: list[str]) -> pd.DataFrame:
     return df[df["id"].isin(ids)].copy()
 
 
-def run_tab(index: Path, sheet: Path, splits: Path, out: Path) -> None:
-    cfg = TabCfg()
-
+def _load(index: Path, sheet: Path, cfg: TabCfg) -> pd.DataFrame:
     idx = pd.read_csv(index)
     sh = read_sheet(sheet).rename(columns={"ID": "id"})
     df = idx.merge(sh, on="id", how="inner")
     df = df[df["id"].str.endswith("_MR1")].copy()
     df["CDR"] = pd.to_numeric(df["CDR"], errors="coerce")
     df = df[~df["CDR"].isna()].copy()
-    df = _prep(df, cfg)
+    return _prep(df, cfg)
+
+
+def _fit_eval(name: str, cfg: TabCfg, feats: list[str], dtr: pd.DataFrame, dte: pd.DataFrame) -> tuple[Pipeline, np.ndarray, float, float]:
+    ytr = _y(dtr)
+    yte = _y(dte)
+    pipe = _pipe(cfg, name=name)
+    pipe.fit(dtr[feats], ytr)
+    te_p = pipe.predict_proba(dte[feats])[:, 1]
+    auc = float(roc_auc_score(yte, te_p)) if len(np.unique(yte)) > 1 else float("nan")
+    bac = float(balanced_accuracy_score(yte, (te_p >= 0.5).astype(int)))
+    return pipe, te_p, auc, bac
+
+
+def _feat_names(pipe: Pipeline, cfg: TabCfg) -> list[str]:
+    pre = pipe.named_steps["pre"]
+    feat = list(cfg.num)
+    oh = pre.named_transformers_["cat"].named_steps["oh"]
+    feat.extend(oh.get_feature_names_out(list(cfg.cat)).tolist())
+    return feat
+
+
+def _coef_rows(pipe: Pipeline, cfg: TabCfg, fold: int) -> list[dict[str, object]]:
+    clf = pipe.named_steps["clf"]
+    feat = _feat_names(pipe, cfg)
+    coef = clf.coef_.ravel().tolist()
+    return [{"fold": fold, "feature": f, "coef": float(c), "abs_coef": float(abs(c))} for f, c in zip(feat, coef, strict=True)]
+
+
+def _imp_rows(pipe: Pipeline, cfg: TabCfg, fold: int, model: str) -> list[dict[str, object]]:
+    clf = pipe.named_steps["clf"]
+    feat = _feat_names(pipe, cfg)
+    imp = clf.feature_importances_.tolist()
+    return [{"model": model, "fold": fold, "feature": f, "importance": float(v)} for f, v in zip(feat, imp, strict=True)]
+
+
+def run_tab(index: Path, sheet: Path, splits: Path, out: Path) -> None:
+    cfg = TabCfg()
+    df = _load(index=index, sheet=sheet, cfg=cfg)
 
     tr = read_lines(splits / "train.txt")
     va = read_lines(splits / "val.txt")
@@ -113,23 +157,13 @@ def run_tab(index: Path, sheet: Path, splits: Path, out: Path) -> None:
     dte = _subset(df, te)
 
     feats = list(cfg.num + cfg.cat)
-    ytr = _y(dtr)
     yte = _y(dte)
 
     run_dir = mk(out / "run")
-    models = [("logreg", "logistic regression"), ("rf", "random forest"), ("gb", "gradient boosting")]
     rows = []
 
-    def eval_one(name: str) -> tuple[np.ndarray, float, float]:
-        p = _pipe(cfg, name=name)
-        p.fit(dtr[feats], ytr)
-        te_p = p.predict_proba(dte[feats])[:, 1]
-        auc = float(roc_auc_score(yte, te_p)) if len(np.unique(yte)) > 1 else float("nan")
-        bac = float(balanced_accuracy_score(yte, (te_p >= 0.5).astype(int)))
-        return te_p, auc, bac
-
-    for name, disp in models:
-        te_p, auc, bac = eval_one(name)
+    for name, disp in MODELS:
+        _, te_p, auc, bac = _fit_eval(name=name, cfg=cfg, feats=feats, dtr=dtr, dte=dte)
         rows.append({"model": name, "name": disp, "auc": auc, "bal_acc": bac, "n_test": int(len(dte))})
 
         # keep the original "run/" outputs as the logreg artefacts for downstream tooling
@@ -176,3 +210,91 @@ def run_tab(index: Path, sheet: Path, splits: Path, out: Path) -> None:
     plt.tight_layout()
     plt.savefig(run_dir / "compare_auc.png", dpi=200)
     plt.close()
+
+
+def run_tabcv(index: Path, sheet: Path, out: Path, folds: int = 5, seed: int = 7) -> None:
+    cfg = TabCfg()
+    df = _load(index=index, sheet=sheet, cfg=cfg)
+    feats = list(cfg.num + cfg.cat)
+    y = _y(df)
+
+    if len(df) < folds:
+        raise ValueError(f"need at least {folds} labelled MR1 rows for {folds}-fold CV")
+
+    run_dir = mk(out / "run")
+    split = StratifiedKFold(n_splits=folds, shuffle=True, random_state=seed)
+
+    fold_rows: list[dict[str, object]] = []
+    coef_rows: list[dict[str, object]] = []
+    imp_rows: list[dict[str, object]] = []
+
+    for fold, (tr_ix, te_ix) in enumerate(split.split(df["subj"], y), start=1):
+        dtr = df.iloc[tr_ix].copy()
+        dte = df.iloc[te_ix].copy()
+        yte = _y(dte)
+
+        for name, disp in MODELS:
+            pipe, te_p, auc, bac = _fit_eval(name=name, cfg=cfg, feats=feats, dtr=dtr, dte=dte)
+            brier = float(np.mean((te_p - yte) ** 2))
+            fold_rows.append(
+                {
+                    "model": name,
+                    "name": disp,
+                    "fold": fold,
+                    "n_train": int(len(dtr)),
+                    "n_test": int(len(dte)),
+                    "auc": auc,
+                    "bal_acc": bac,
+                    "brier": brier,
+                }
+            )
+            if name == "logreg":
+                coef_rows.extend(_coef_rows(pipe=pipe, cfg=cfg, fold=fold))
+            else:
+                imp_rows.extend(_imp_rows(pipe=pipe, cfg=cfg, fold=fold, model=name))
+
+    fold_df = pd.DataFrame(fold_rows).sort_values(["model", "fold"])
+    fold_df.to_csv(run_dir / "fold_metrics.csv", index=False)
+
+    summ = (
+        fold_df.groupby(["model", "name"], as_index=False)
+        .agg(
+            auc_mean=("auc", "mean"),
+            auc_std=("auc", "std"),
+            bal_acc_mean=("bal_acc", "mean"),
+            bal_acc_std=("bal_acc", "std"),
+            brier_mean=("brier", "mean"),
+            brier_std=("brier", "std"),
+        )
+        .sort_values("auc_mean", ascending=False)
+    )
+    summ.to_csv(run_dir / "summary.csv", index=False)
+    (run_dir / "summary.json").write_text(json.dumps(summ.to_dict(orient="records"), indent=2) + "\n")
+
+    coef_df = pd.DataFrame(coef_rows)
+    if not coef_df.empty:
+        coef_df.to_csv(run_dir / "logreg_coef_folds.csv", index=False)
+        coef_summ = (
+            coef_df.groupby("feature", as_index=False)
+            .agg(
+                coef_mean=("coef", "mean"),
+                coef_std=("coef", "std"),
+                abs_coef_mean=("abs_coef", "mean"),
+                abs_coef_std=("abs_coef", "std"),
+            )
+            .sort_values("abs_coef_mean", ascending=False)
+        )
+        coef_summ.to_csv(run_dir / "logreg_coef_summary.csv", index=False)
+
+    imp_df = pd.DataFrame(imp_rows)
+    if not imp_df.empty:
+        imp_df.to_csv(run_dir / "tree_importance_folds.csv", index=False)
+        imp_summ = (
+            imp_df.groupby(["model", "feature"], as_index=False)
+            .agg(
+                importance_mean=("importance", "mean"),
+                importance_std=("importance", "std"),
+            )
+            .sort_values(["model", "importance_mean"], ascending=[True, False])
+        )
+        imp_summ.to_csv(run_dir / "tree_importance_summary.csv", index=False)

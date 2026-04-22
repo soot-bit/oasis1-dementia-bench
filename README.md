@@ -1,248 +1,194 @@
+
 # OASIS-1 Dementia Benchmark: Leakage-Aware MRI + Clinical Baselines
 
-This repository implements a reproducible benchmark for dementia classification on **OASIS-1** using **subject-level (leakage-aware) splits**, simple **clinical/morphometric** baselines, and a **processed structural MRI** baseline. The goal is to answer one practical question under a setup that resists “small data” pitfalls: do image models actually beat structured features, or do they only look better under leaky evaluation?
+This repository implements a **reproducible benchmark for dementia classification on OASIS-1**, using **subject-level (leakage-aware) splits**, **clinical/morphometric baselines**, and a **processed MRI baseline**.
 
-Main claim: **tabular clinical + morphometric features provide a strong baseline signal; MRI models are only meaningful when evaluated directly against this baseline under leakage-aware subject splits.**
+**Goal:** evaluate whether image models actually add value over structured features under a *correct evaluation setup*.
 
-## Problem
+> **Main claim:**
+> Clinical + morphometric features provide a strong baseline signal; MRI models are only meaningful when evaluated directly against this baseline under leakage-aware subject splits.
 
-Can dementia-related signal in OASIS-1 (label: `CDR>0` vs `CDR=0`) be predicted reliably from processed T1 MRI, and how does MRI modelling compare to tabular clinical/morphometric baselines under subject-level splits?
+---
 
-## Dataset
+# 🧠 Problem
 
-Recommended minimum benchmark setup: extract and index **`disc1` + `disc2` + `disc3`**, then keep `MR1` only for the default split logic.
+Can dementia-related signal (`CDR > 0` vs `CDR = 0`) be predicted from structural MRI, and how does MRI modelling compare to tabular clinical/morphometric baselines when **data leakage is explicitly controlled**?
 
-| Item | Value |
-|---|---:|
-| Sessions indexed | 39 |
-| Subjects (MR1) | 39 |
-| Labelled sessions (`CDR` present) | 25 |
-| Dementia cases (`CDR>0`) | 12 |
-| Non-dementia (`CDR=0`) | 13 |
+---
 
-![Label counts](docs/img/y_counts.png)
+# 📊 Dataset
 
-## Results (current committed snapshot; `disc1`, seed 7; labelled rows only)
+Current benchmark uses a **3-disc subset of OASIS-1** (`disc1–disc3`), with:
 
-Note: for `disc1` only, the test set is tiny (`n=5` labelled subjects in this split), so these numbers are high-variance and intended mainly to demonstrate the benchmark workflow.
+* **MR1 only** (one scan per subject)
+* **subject-level splits**
+* **rows with missing CDR removed**
 
-| Model | Input | ROC-AUC | Balanced acc | Brier | ECE |
-|---|---|---:|---:|---:|---:|
-| Logistic regression | tabular | 0.667 | 0.583 | 0.225 | 0.263 |
-| Random forest | tabular | 0.667 | 0.583 | 0.253 | 0.437 |
-| Gradient boosting | tabular | 0.583 | 0.750 | 0.200 | 0.200 |
-| 2D CNN | MRI | 0.167 | 0.500 | 0.247 | 0.084 |
-| Fusion (log-reg) | tabular + MRI embedding | 0.667 | 0.583 | — | — |
+Example snapshot (disc1 only, for illustration):
 
-![Tabular ROC](docs/img/roc.png)
+| Item              | Value |
+| ----------------- | ----: |
+| Sessions indexed  |    39 |
+| Subjects (MR1)    |    39 |
+| Labelled sessions |    25 |
+| Dementia cases    |    12 |
+| Non-dementia      |    13 |
 
-Tabular model comparison (ROC-AUC):
+<p align="center">
+  <img src="docs/img/y_counts.png" alt="Label counts" width="340" />
+</p>
 
-![Tabular comparison](docs/img/tab_compare_auc.png)
+> Results below are from the **3-disc subset**, not the full dataset.
 
-Calibration (tabular baseline):
+---
 
-![Tab reliability](docs/img/tab_reliability.png)
+# 📈 Results (cross-validated classical baseline)
 
-## One takeaway
+Subject-level cross-validation (3 discs):
 
-On very small OASIS-1 subsets, **clinical + morphometric features provide a strong baseline** and should be treated as the reference point before claiming gains from image models. This repo is built to scale from `disc1` to all discs to make that comparison stable and defensible.
+| Model               | ROC-AUC (mean ± std) | Balanced Acc    | Brier |
+| ------------------- | -------------------- | --------------- | ----- |
+| Logistic Regression | **0.80 ± 0.14**      | **0.72 ± 0.11** | 0.186 |
+| Random Forest       | 0.81 ± 0.12          | 0.68 ± 0.14     | 0.183 |
+| Gradient Boosting   | 0.78 ± 0.09          | 0.67 ± 0.04     | 0.278 |
 
-Conclusion (current snapshot): on `disc1`, the image baseline and fusion do not yet beat tabular. The intended benchmark run is `disc1` + `disc2` + `disc3`, which gives a less fragile estimate than a single-disc split.
+Single-split snapshot (n=14 test subjects, for illustration only):
 
-CNN sanity check (common pitfall on tiny test sets): if `obench cal` reports very small `p_std` (nearly-constant probabilities) and `auc_flip >> auc`, the model is effectively not separating classes and the AUC ranking may look “inverted” due to tiny jitter. Treat `auc_flip` as a diagnostic, not as a score to report.
+| Model               | Input      |       ROC-AUC | Balanced acc | Brier |   ECE |
+| ------------------- | ---------- | ------------: | -----------: | ----: | ----: |
+| Logistic regression | tabular    |         0.979 |        0.875 | 0.117 | 0.176 |
+| Random forest       | tabular    |         1.000 |        0.750 | 0.125 | 0.291 |
+| Gradient boosting   | tabular    |         0.833 |        0.812 | 0.199 | 0.208 |
+| 2D CNN              | MRI        | 0.65 (approx) |         0.50 |     — |     — |
+| Fusion              | multimodal |           WIP |          WIP |     — |     — |
 
-## Main contribution
+Representative single-split plots from the latest tabular run:
 
-- A leakage-aware, benchmark-style pipeline (index → manifest → subject splits → baselines → error analysis).
-- A first-class manifest (`index.csv`/`manifest.csv`) so experiments are “dataset-like”, not script-like.
-- Baselines that make the comparison explicit: tabular (structured) vs image (processed MRI).
-- A simple multimodal fusion baseline (tabular + image embedding) to test whether MRI adds value beyond structured features.
-- Calibration + uncertainty plots (reliability diagram, confidence, entropy) to support “trustworthy AI” analysis.
+<p align="center">
+  <img src="docs/img/roc.png" alt="Tabular ROC" width="250" />
+  <img src="docs/img/tab_compare_auc.png" alt="Tabular model comparison" width="250" />
+  <img src="docs/img/tab_reliability.png" alt="Tabular reliability" width="250" />
+</p>
 
-## Pipeline (high level)
+---
 
-![Pipeline](docs/img/pipeline.png)
+# 🔑 Key takeaway
 
-## Why this matters
+> **Structured features already carry strong dementia signal.**
 
-If deep learning “wins” on small cohorts only under leaky splits, duplicated scans, or hidden shortcuts, it’s not a trustworthy result. A benchmark that surfaces split rules, cohort size/missingness, and failure cases is a better starting point for biomedical imaging research.
+* Logistic regression is the most **reliable baseline**:
 
-## Data layout
+  * strong ROC-AUC
+  * stable balanced accuracy
+  * better calibration than tree models
+* Random forest shows **perfect ranking on some splits**, but poorer calibration and threshold stability
+* Errors concentrate on **older nondemented controls**, indicating:
 
-- `data/raw/oasis1/`: downloaded archives + spreadsheets (immutable)
-- `data/oasis1/`: extracted discs + manifest files + split files (derived)
-- `data/processed/oasis1/`: optional preprocessed outputs (derived)
-- `reports/`: plots, tables, error analysis
+  * the model learns age/atrophy signal
+  * but struggles to separate ageing from pathology
 
-## First-class artefacts
+👉 MRI models must beat this baseline **under the same split** to be meaningful.
 
-- `data/oasis1/index.csv`: file manifest created by `obench index` (paths + canonical processed volumes)
-- `data/oasis1/manifest.csv`: merged manifest (index + labels + key columns) created by `obench manifest`
-- `data/oasis1/train.txt`, `data/oasis1/val.txt`, `data/oasis1/test.txt`: subject-level split files created by `obench split`
+---
 
-## Setup (uv)
+# ⚠️ Important note (small-data behaviour)
+
+* Test sets are small → metrics are **high variance**
+* Cross-validation reduces optimism (≈0.98 → ≈0.80 AUC)
+* This benchmark is designed to expose **small-data pitfalls**, not hide them
+
+---
+
+# 🧪 MRI baseline (current status)
+
+A 2D CNN on processed MRI shows:
+
+* AUC ≈ 0.65 (ranking signal exists)
+* Balanced accuracy ≈ 0.50 (poor separation)
+
+Common failure mode:
+
+* near-constant prediction probabilities (`p_std ≈ 0`)
+* weak class separation despite non-random ranking
+
+👉 Indicates:
+
+* input design is critical (slice choice, orientation)
+* naive 2D models are insufficient
+
+---
+
+# 🧠 Main contribution
+
+* Leakage-aware pipeline:
+
+  ```
+  index → manifest → subject splits → baselines → error analysis
+  ```
+* Dataset-style workflow via **manifest CSV**
+* Explicit comparison:
+
+  * tabular vs MRI vs fusion
+* Calibration + uncertainty analysis
+* Focus on **reproducibility over raw performance**
+
+---
+
+# 🧭 Why this matters
+
+Deep learning often appears strong on small medical datasets due to:
+
+* leakage
+* duplicated scans
+* shortcut learning
+
+This benchmark enforces:
+
+* subject-level evaluation
+* transparent cohort definition
+* explicit baseline comparison
+
+👉 making results **trustworthy and interpretable**
+
+---
+
+# 🗂️ Data layout
+
+* `data/raw/oasis1/` → immutable downloads
+* `data/oasis1/` → extracted discs + manifests
+* `data/processed/oasis1/` → derived outputs
+* `reports/` → metrics, plots, analysis
+
+---
+
+# ⚙️ Quick start
 
 ```bash
 uv sync
-```
-
-## Install (editable)
-
-From the repo root:
-
-```bash
 uv pip install -e .
 ```
 
-Dev tools (tests):
+---
 
-```bash
-uv pip install -e ".[dev]"
-uv run pytest
-```
+# 🔁 Pipeline
 
-## 1) Index extracted sessions
-
-Recommended: prepare at least `disc1`, `disc2`, and `disc3`. Keep the raw archives in `data/raw/oasis1/` and extract into `data/oasis1/`.
-
-Fast path:
+## 1. Prepare dataset
 
 ```bash
 bash scripts/prep_oasis1.sh
 ```
 
-This script:
-
-- checks for `disc1` / `disc2` / `disc3` archives and the cohort spreadsheet
-- extracts missing discs into `data/oasis1/`
-- writes `data/oasis1/index.csv`
-- writes `data/oasis1/manifest.csv`
-- writes `data/oasis1/train.txt`, `data/oasis1/val.txt`, `data/oasis1/test.txt`
-
-Manual equivalent:
+## 2. Tabular benchmark
 
 ```bash
-mkdir -p data/oasis1
-tar -xzf data/raw/oasis1/oasis_cross-sectional_disc1.tar.gz -C data/oasis1
-tar -xzf data/raw/oasis1/oasis_cross-sectional_disc2.tar.gz -C data/oasis1
-tar -xzf data/raw/oasis1/oasis_cross-sectional_disc3.tar.gz -C data/oasis1
+bash scripts/bench_tab.sh
 ```
 
-Build an index from the recommended 3-disc setup:
+## 3. MRI baseline
 
 ```bash
-uv run obench index --root data/oasis1/disc1 --root data/oasis1/disc2 --root data/oasis1/disc3 --out data/oasis1/index.csv
+uv run obench cnn2d ...
 ```
 
-Or pass the parent folder (auto-detects `disc*` subfolders):
 
-```bash
-uv run obench index --root data/oasis1 --out data/oasis1/index.csv
-```
 
-The index stores per-session paths to `RAW/`, `PROCESSED/`, `FSL_SEG/`, `*.xml`, `*.txt`, and the canonical processed images.
-
-## 1.5) Build a merged manifest (index + labels)
-
-This produces a single CSV you can treat like a benchmark dataset table (labels + paths).
-
-```bash
-uv run obench manifest --index data/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --out data/oasis1/manifest.csv
-```
-
-## 2) Create subject-level splits
-
-Default: use `MR1` only (one session per subject), and stratify by dementia label.
-
-```bash
-uv run obench split --index data/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --out data/oasis1
-```
-
-Outputs:
-
-- `data/oasis1/train.txt`
-- `data/oasis1/val.txt`
-- `data/oasis1/test.txt`
-
-Each file contains one session `ID` per line (e.g. `OAS1_0018_MR1`).
-
-Recommended practice: do not benchmark on a single disc unless you are only smoke-testing the pipeline. Use at least `disc1` + `disc2` + `disc3` for any metric you want to show publicly.
-
-## 3) Tabular baselines (clinical + morphometric)
-
-Runs a regularized logistic regression with a simple, explicit feature set.
-
-```bash
-uv run obench tab --index data/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --splits data/oasis1 --out reports/tab
-```
-
-Outputs metrics + ROC/confusion matrix plots, and a CSV of per-subject errors.
-
-## 3.25) Tabular error analysis
-
-```bash
-uv run obench errtab --errors reports/tab/run/errors.csv --out docs/err/tab
-```
-
-Example outputs committed: `docs/err/tab/README.md`, `docs/err/tab/age_by_tag.png`, `docs/err/tab/mmse_by_tag.png`.
-
-## 3.5) EDA (quick sanity checks)
-
-```bash
-uv run obench eda --index data/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --out reports/eda
-```
-
-This writes label counts (for labelled rows), missingness summary, and a few basic plots.
-
-## 4) 2D MRI baseline (from processed MRI)
-
-Trains a small 2D CNN on slices from the canonical processed volume (`T88_111/*_t88_masked_gfc`).
-
-```bash
-uv run obench cnn2d --index data/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --splits data/oasis1 --out reports/cnn2d
-```
-
-## 4.5) Calibration / uncertainty (simple)
-
-Tabular model calibration from `errors.csv`:
-
-```bash
-uv run obench cal --pred reports/tab/run/errors.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --out reports/cal/tab
-```
-
-CNN calibration from `pred.json`:
-
-```bash
-uv run obench cal --pred reports/cnn2d/run/pred.json --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --out reports/cal/cnn2d
-```
-
-Example plots committed:
-
-![Tab reliability](docs/img/tab_reliability.png)
-
-## 5) Fusion baseline (tabular + CNN embedding)
-
-1) Train the 2D CNN to produce `reports/cnn2d/run/model.pt`.
-
-2) Extract per-subject embeddings:
-
-```bash
-uv run obench emb2d --index data/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --splits data/oasis1 --weights reports/cnn2d/run/model.pt --out reports/emb/emb2d.csv
-```
-
-3) Train fusion:
-
-```bash
-uv run obench fuse --index data/oasis1/index.csv --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx --emb reports/emb/emb2d.csv --splits data/oasis1 --out reports/fuse --model logreg
-```
-
-## Notes on labels
-
-By default:
-
-- target is dementia: `CDR == 0` vs `CDR > 0`
-- `CDR` is used only as a label (never as an input feature)
-- rows with missing `CDR` are excluded from split/train/eval
-
-If you decide to include cognitive tests (e.g. `MMSE`) as inputs, treat that as a separate “clinical realism” track.
