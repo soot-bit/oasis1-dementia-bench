@@ -21,6 +21,24 @@ def _p(p: str) -> Path:
     return Path(p).expanduser().resolve()
 
 
+def _add_cnn_args(ap: argparse.ArgumentParser) -> None:
+    ap.add_argument("--index", required=True, type=_p)
+    ap.add_argument("--sheet", required=True, type=_p)
+    ap.add_argument("--splits", required=True, type=_p)
+    ap.add_argument("--out", required=True, type=_p)
+    ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--epochs", type=int, default=30)
+    ap.add_argument("--bs", type=int, default=8)
+    ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--slices", type=int, default=24)
+    ap.add_argument("--pick", choices=["topnz", "lin", "mid"], default="topnz")
+    ap.add_argument("--pool", choices=["max", "mean", "lse", "attn"], default="max")
+    ap.add_argument("--no-aug", action="store_true")
+    ap.add_argument("--axis", type=int, choices=[0, 1, 2], default=2, help="slice axis (2=axial-ish default)")
+    ap.add_argument("--ch", type=int, choices=[1, 3], default=1, help="2.5D channels per slice")
+    ap.add_argument("--arch", choices=["tiny", "resnet18"], default="tiny")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(prog="obench")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -57,22 +75,14 @@ def main() -> None:
     ap_tc.add_argument("--folds", type=int, default=5)
     ap_tc.add_argument("--seed", type=int, default=7)
 
-    ap_c = sub.add_parser("cnn2d", help="2D CNN baseline from processed MRI (run in separate shell)")
-    ap_c.add_argument("--index", required=True, type=_p)
-    ap_c.add_argument("--sheet", required=True, type=_p)
-    ap_c.add_argument("--splits", required=True, type=_p)
-    ap_c.add_argument("--out", required=True, type=_p)
-    ap_c.add_argument("--seed", type=int, default=7)
-    ap_c.add_argument("--epochs", type=int, default=30)
-    ap_c.add_argument("--bs", type=int, default=8)
-    ap_c.add_argument("--lr", type=float, default=3e-4)
-    ap_c.add_argument("--slices", type=int, default=24)
-    ap_c.add_argument("--pick", choices=["topnz", "lin", "mid"], default="topnz")
-    ap_c.add_argument("--pool", choices=["max", "mean", "lse"], default="max")
-    ap_c.add_argument("--no-aug", action="store_true")
-    ap_c.add_argument("--axis", type=int, choices=[0, 1, 2], default=2, help="slice axis (2=axial-ish default)")
-    ap_c.add_argument("--ch", type=int, choices=[1, 3], default=1, help="2.5D channels per slice")
-    ap_c.add_argument("--arch", choices=["tiny", "resnet18"], default="tiny")
+    ap_c = sub.add_parser("cnn2d", help="2D CNN baseline from processed MRI (manual trainer)")
+    _add_cnn_args(ap_c)
+
+    ap_l = sub.add_parser("cnnlit", help="2D CNN baseline with PyTorch Lightning")
+    _add_cnn_args(ap_l)
+    ap_l.add_argument("--patience", type=int, default=8, help="early-stopping patience on validation AUC")
+    ap_l.add_argument("--workers", type=int, default=0, help="data-loader workers")
+    ap_l.add_argument("--precision", default="auto", help="Lightning precision: auto, 32-true, 16-mixed, bf16-mixed")
 
     ap_e = sub.add_parser("eda", help="basic EDA from spreadsheet + index")
     ap_e.add_argument("--index", required=True, type=_p)
@@ -90,6 +100,24 @@ def main() -> None:
     ap_x.add_argument("--errors", required=True, type=_p, help="errors.csv from `obench tab`")
     ap_x.add_argument("--out", required=True, type=_p, help="output dir")
 
+    ap_xt = sub.add_parser("xaitab", help="tabular explainability: permutation, coefficients, local contributions")
+    ap_xt.add_argument("--index", required=True, type=_p)
+    ap_xt.add_argument("--sheet", required=True, type=_p)
+    ap_xt.add_argument("--splits", required=True, type=_p)
+    ap_xt.add_argument("--out", required=True, type=_p)
+    ap_xt.add_argument("--repeats", type=int, default=100)
+    ap_xt.add_argument("--seed", type=int, default=7)
+    ap_xt.add_argument("--top", type=int, default=12)
+
+    ap_xc = sub.add_parser("xaicnn", help="CNN explainability: Grad-CAM panels and sanity checks")
+    ap_xc.add_argument("--index", required=True, type=_p)
+    ap_xc.add_argument("--sheet", required=True, type=_p)
+    ap_xc.add_argument("--splits", required=True, type=_p)
+    ap_xc.add_argument("--run", required=True, type=_p, help="CNN run dir containing model.pt, train.json, metrics.json")
+    ap_xc.add_argument("--out", required=True, type=_p)
+    ap_xc.add_argument("--n", type=int, default=2, help="examples per TP/FP/TN/FN group")
+    ap_xc.add_argument("--split", choices=["train", "val", "test"], default="test")
+
     ap_k = sub.add_parser("cal", help="calibration + uncertainty from predictions (json/csv)")
     ap_k.add_argument("--pred", required=True, type=_p, help="predictions file: JSON(id->p) or CSV(id,p)")
     ap_k.add_argument("--sheet", required=True, type=_p, help="oasis_cross-sectional*.xlsx (provides CDR labels)")
@@ -102,7 +130,7 @@ def main() -> None:
     ap_b.add_argument("--splits", required=True, type=_p)
     ap_b.add_argument("--weights", required=True, type=_p, help="model.pt from `obench cnn2d`")
     ap_b.add_argument("--out", required=True, type=_p, help="output CSV (id,y,e0..e63)")
-    ap_b.add_argument("--pool", choices=["max", "mean"], default="max", help="embedding pooling (match cnn2d if possible)")
+    ap_b.add_argument("--pool", choices=["max", "mean", "attn"], default="max", help="embedding pooling (match cnn2d if possible)")
     ap_b.add_argument("--slices", type=int, default=24)
     ap_b.add_argument("--pick", choices=["topnz", "lin", "mid"], default="topnz")
     ap_b.add_argument("--axis", type=int, choices=[0, 1, 2], default=2)
@@ -160,6 +188,30 @@ def main() -> None:
             arch=a.arch,
         )
         return
+    if a.cmd == "cnnlit":
+        from .cnnlit import run_cnnlit
+
+        run_cnnlit(
+            index=a.index,
+            sheet=a.sheet,
+            splits=a.splits,
+            out=a.out,
+            seed=a.seed,
+            epochs=a.epochs,
+            bs=a.bs,
+            lr=a.lr,
+            slices=a.slices,
+            pick=a.pick,
+            pool=a.pool,
+            aug=(not a.no_aug),
+            axis=a.axis,
+            ch=a.ch,
+            arch=a.arch,
+            patience=a.patience,
+            workers=a.workers,
+            precision=a.precision,
+        )
+        return
     if a.cmd == "eda":
         run_eda(index=a.index, sheet=a.sheet, out=a.out)
         return
@@ -168,6 +220,16 @@ def main() -> None:
         return
     if a.cmd == "errtab":
         run_err_tab(errors=a.errors, out=a.out)
+        return
+    if a.cmd == "xaitab":
+        from .xai import run_xaitab
+
+        run_xaitab(index=a.index, sheet=a.sheet, splits=a.splits, out=a.out, repeats=a.repeats, seed=a.seed, top=a.top)
+        return
+    if a.cmd == "xaicnn":
+        from .xai import run_xaicnn
+
+        run_xaicnn(index=a.index, sheet=a.sheet, splits=a.splits, run=a.run, out=a.out, n=a.n, split=a.split)
         return
     if a.cmd == "cal":
         run_cal(pred=a.pred, sheet=a.sheet, out=a.out, bins=a.bins)

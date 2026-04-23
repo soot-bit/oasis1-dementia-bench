@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .cnn2d import Cfg, ResNet18, TinyNet, Vol2D, _collate, _emb_pool
+from .cnn2d import AttentionPool, Cfg, ResNet18, TinyNet, Vol2D, _collate, _emb_pool
 from .io import read_lines, read_sheet
 from .utils.fp import mk
 
@@ -48,7 +48,19 @@ def run_emb2d(
         net = TinyNet(in_ch=int(ch)).to(dev)
     sd = torch.load(weights, map_location="cpu")
     net.load_state_dict(sd)
+
+    attn = None
+    if pool == "attn":
+        dim = 512 if arch == "resnet18" else 64
+        attn = AttentionPool(dim=dim).to(dev)
+        # try to load attn.pt from same dir
+        ap = weights.parent / "attn.pt"
+        if ap.exists():
+            attn.load_state_dict(torch.load(ap, map_location="cpu"))
+
     net.eval()
+    if attn is not None:
+        attn.eval()
 
     cfg = Cfg(pool=pool, slices=int(slices), pick=str(pick), axis=int(axis), ch=int(ch), aug=False)
     dl = DataLoader(Vol2D(df, cfg), batch_size=4, shuffle=False, num_workers=0, collate_fn=_collate)
@@ -57,7 +69,7 @@ def run_emb2d(
     with torch.no_grad():
         for xb, yb, idb in tqdm(dl, desc="emb2d"):
             xb = xb.to(dev)
-            e = _emb_pool(net, xb, pool=cfg.pool).cpu().numpy()  # B,64
+            e = _emb_pool(net, xb, pool=cfg.pool, attn=attn).cpu().numpy()  # B,D
             for i, sid in enumerate(idb):
                 rows.append({"id": sid, "y": int(yb[i].item()), **{f"e{i2}": float(e[i, i2]) for i2 in range(e.shape[1])}})
 

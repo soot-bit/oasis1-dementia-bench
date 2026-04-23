@@ -13,8 +13,10 @@ dependencies = [
   "nibabel>=5.2",
   "openpyxl>=3.1",
   "torch>=2.2",
+  "torchvision",
   "tqdm>=4.66",
   "rich>=13.7",
+  "lightning>=2.6.1",
 ]
 
 [project.optional-dependencies]

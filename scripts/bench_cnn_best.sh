@@ -27,26 +27,42 @@ need "$sheet"
 
 cd "$root"
 
-uv run obench cnn2d \
+echo "Training improved CNN baseline with Attention Pooling and Spatial Augmentation..."
+
+uv run obench cnnlit \
   --index data/oasis1/index.csv \
   --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx \
   --splits data/oasis1 \
-  --out reports/cnn2d_best \
-  --epochs 30 \
+  --out reports/cnnlit_best \
+  --epochs 50 \
   --bs 8 \
-  --lr 3e-4 \
+  --lr 1e-4 \
   --axis 1 \
   --ch 3 \
   --arch tiny \
-  --pool mean \
+  --pool attn \
   --pick mid \
-  --slices 24
+  --slices 24 \
+  --patience 12 \
+  --workers 4 \
+  --precision auto
 
 uv run obench cal \
-  --pred reports/cnn2d_best/run/pred.json \
+  --pred reports/cnnlit_best/run/pred.json \
   --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx \
-  --out reports/cal/cnn2d_best
+  --out reports/cal/cnnlit_best
 
-echo "ready: reports/cnn2d_best/run/metrics.json"
-echo "ready: reports/cnn2d_best/run/pred_stats.json"
-echo "ready: reports/cal/cnn2d_best/metrics.json"
+echo "Generating explainability reports for the improved model..."
+
+uv run obench xaicnn \
+  --index data/oasis1/index.csv \
+  --sheet data/raw/oasis1/oasis_cross-sectional-5708aa0a98d82080.xlsx \
+  --splits data/oasis1 \
+  --run reports/cnnlit_best/run \
+  --out reports/xai/cnn_improved \
+  --n 3 \
+  --split test
+
+echo "ready: reports/cnnlit_best/run/metrics.json"
+echo "ready: reports/cnnlit_best/run/pred_stats.json"
+echo "ready: reports/xai/cnn_improved/summary.md"

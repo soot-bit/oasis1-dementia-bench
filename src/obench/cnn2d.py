@@ -23,6 +23,7 @@ from .bayes import cls_ci
 from .io import read_lines, read_sheet
 from .utils.fp import mk
 from .utils.img import load_analyze, zscore_brain
+import torchvision.transforms.functional as TF
 
 
 @dataclass(frozen=True)
@@ -30,7 +31,7 @@ class Cfg:
     slices: int = 24  # per volume (evenly spaced)
     pick: str = "topnz"  # topnz|lin|mid
     aug: bool = True
-    pool: str = "max"  # mean|max|lse
+    pool: str = "max"  # mean|max|lse|attn
     axis: int = 2
     ch: int = 1
 
@@ -65,18 +66,24 @@ def _pick_slices(a: np.ndarray, k: int, mode: str) -> np.ndarray:
 
 
 def _aug(x: torch.Tensor) -> torch.Tensor:
-    # x: K,1,H,W (float32)
-    # light, label-preserving intensity/noise aug
+    # x: K,C,H,W (float32)
+    # light spatial + intensity/noise aug
     if torch.rand(()) < 0.5:
         x = torch.flip(x, dims=[-1])  # left-right
+
+    # spatial: small rotation
+    if torch.rand(()) < 0.8:
+        angle = float(torch.empty(1).uniform_(-10, 10).item())
+        x = TF.rotate(x, angle=angle, interpolation=TF.InterpolationMode.BILINEAR)
+
     if torch.rand(()) < 0.9:
-        s = 0.90 + 0.20 * torch.rand(())
+        s = 0.85 + 0.30 * torch.rand(())
         x = x * s
     if torch.rand(()) < 0.9:
-        b = (-0.10 + 0.20 * torch.rand(()))
+        b = (-0.15 + 0.30 * torch.rand(()))
         x = x + b
     if torch.rand(()) < 0.5:
-        n = 0.01 * torch.rand(())
+        n = 0.02 * torch.rand(())
         x = x + n * torch.randn_like(x)
     return x
 
@@ -120,22 +127,43 @@ class Vol2D(Dataset):
         return x, torch.tensor(y, dtype=torch.long), str(r["id"])
 
 
+class AttentionPool(nn.Module):
+    def __init__(self, dim: int):
+        super().__init__()
+        self.attn = nn.Sequential(
+            nn.Linear(dim, dim // 2),
+            nn.Tanh(),
+            nn.Linear(dim // 2, 1),
+            nn.Softmax(dim=1),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: B, K, D
+        w = self.attn(x)  # B, K, 1
+        return (x * w).sum(dim=1)  # B, D
+
+
 class TinyNet(nn.Module):
     def __init__(self, in_ch: int):
         super().__init__()
         self.c1 = nn.Conv2d(in_ch, 16, 3, padding=1)
+        self.b1 = nn.BatchNorm2d(16)
         self.c2 = nn.Conv2d(16, 32, 3, padding=1)
+        self.b2 = nn.BatchNorm2d(32)
         self.c3 = nn.Conv2d(32, 64, 3, padding=1)
+        self.b3 = nn.BatchNorm2d(64)
+        self.dr = nn.Dropout(0.2)
         self.h = nn.Linear(64, 1)
 
     def enc(self, x: torch.Tensor) -> torch.Tensor:
-        # x: B*K,1,H,W
-        x = F.relu(self.c1(x))
+        # x: B*K,C,H,W
+        x = F.relu(self.b1(self.c1(x)))
         x = F.max_pool2d(x, 2)
-        x = F.relu(self.c2(x))
+        x = F.relu(self.b2(self.c2(x)))
         x = F.max_pool2d(x, 2)
-        x = F.relu(self.c3(x))
-        return F.adaptive_avg_pool2d(x, (1, 1)).flatten(1)  # B*K,64
+        x = F.relu(self.b3(self.c3(x)))
+        x = F.adaptive_avg_pool2d(x, (1, 1)).flatten(1)  # B*K,64
+        return self.dr(x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         e = self.enc(x)
@@ -176,6 +204,7 @@ class ResNet18(nn.Module):
         self.l2 = self._layer(64, 128, n=2, stride=2)
         self.l3 = self._layer(128, 256, n=2, stride=2)
         self.l4 = self._layer(256, 512, n=2, stride=2)
+        self.dr = nn.Dropout(0.2)
         self.h = nn.Linear(512, 1)
 
     def _layer(self, in_c: int, out_c: int, n: int, stride: int) -> nn.Sequential:
@@ -191,7 +220,8 @@ class ResNet18(nn.Module):
         x = self.l2(x)
         x = self.l3(x)
         x = self.l4(x)
-        return F.adaptive_avg_pool2d(x, (1, 1)).flatten(1)  # B,512
+        x = F.adaptive_avg_pool2d(x, (1, 1)).flatten(1)  # B,512
+        return self.dr(x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         e = self.enc(x)
@@ -203,7 +233,7 @@ def _collate(batch):
     return torch.stack(xs, 0), torch.stack(ys, 0), list(ids)
 
 
-def _step_pool(net: nn.Module, xb: torch.Tensor, pool: str) -> torch.Tensor:
+def _step_pool(net: nn.Module, xb: torch.Tensor, pool: str, attn: nn.Module | None = None) -> torch.Tensor:
     b, k = xb.shape[:2]
     x = xb.view(b * k, *xb.shape[2:])
     if pool == "lse":
@@ -211,31 +241,37 @@ def _step_pool(net: nn.Module, xb: torch.Tensor, pool: str) -> torch.Tensor:
         return torch.logsumexp(logit, dim=1) - math.log(max(1, k))
 
     e = net.enc(x).view(b, k, -1)
-    if pool == "mean":
+    if pool == "attn" and attn is not None:
+        g = attn(e)
+    elif pool == "mean":
         g = e.mean(1)
     else:
         g = e.max(1).values
     return net.h(g).squeeze(1)
 
 
-def _emb_pool(net: nn.Module, xb: torch.Tensor, pool: str) -> torch.Tensor:
+def _emb_pool(net: nn.Module, xb: torch.Tensor, pool: str, attn: nn.Module | None = None) -> torch.Tensor:
     b, k = xb.shape[:2]
     x = xb.view(b * k, *xb.shape[2:])
     e = net.enc(x).view(b, k, -1)
+    if pool == "attn" and attn is not None:
+        return attn(e)
     if pool == "mean":
         return e.mean(1)
     return e.max(1).values
 
 
-def _eval(net: nn.Module, dl: DataLoader, dev: torch.device, pool: str) -> tuple[float, float, dict[str, float]]:
+def _eval(net: nn.Module, dl: DataLoader, dev: torch.device, pool: str, attn: nn.Module | None = None) -> tuple[float, float, dict[str, float]]:
     net.eval()
+    if attn is not None:
+        attn.eval()
     ps = []
     ys = []
     ids = []
     with torch.no_grad():
         for xb, yb, idb in dl:
             xb = xb.to(dev)
-            logit = _step_pool(net, xb, pool=pool)
+            logit = _step_pool(net, xb, pool=pool, attn=attn)
             p = torch.sigmoid(logit).cpu().numpy()
             ps.append(p)
             ys.append(yb.numpy())
@@ -331,7 +367,16 @@ def run_cnn2d(
         net = ResNet18(in_ch=cfg.ch).to(dev)
     else:
         net = TinyNet(in_ch=cfg.ch).to(dev)
-    opt = torch.optim.AdamW(net.parameters(), lr=lr)
+
+    attn = None
+    if cfg.pool == "attn":
+        dim = 512 if arch == "resnet18" else 64
+        attn = AttentionPool(dim=dim).to(dev)
+
+    params = list(net.parameters())
+    if attn is not None:
+        params += list(attn.parameters())
+    opt = torch.optim.AdamW(params, lr=lr)
 
     dl_tr = DataLoader(Vol2D(dtr, cfg), batch_size=bs, shuffle=True, num_workers=0, collate_fn=_collate)
     # disable augmentation for eval
@@ -380,18 +425,20 @@ def run_cnn2d(
     best_epoch = -1
     for ep in tqdm(range(epochs), desc="epoch", total=epochs):
         net.train()
+        if attn is not None:
+            attn.train()
         tr_loss = []
         for xb, yb, _ in tqdm(dl_tr, desc="train", leave=False):
             xb = xb.to(dev)
             yb = yb.to(dev).float()
-            logit = _step_pool(net, xb, pool=cfg.pool)
+            logit = _step_pool(net, xb, pool=cfg.pool, attn=attn)
             loss = F.binary_cross_entropy_with_logits(logit, yb, pos_weight=pos_w_t)
             opt.zero_grad()
             loss.backward()
             opt.step()
             tr_loss.append(float(loss.detach().cpu().item()))
 
-        auc, bac05, va_p = _eval(net, dl_va, dev, pool=cfg.pool)
+        auc, bac05, va_p = _eval(net, dl_va, dev, pool=cfg.pool, attn=attn)
         va_df = pd.DataFrame([{"id": k, "p": float(v)} for k, v in va_p.items()])
         va_df = va_df.merge(dva[["id", "y"]], on="id", how="inner")
         v_y = va_df["y"].to_numpy(dtype=int)
@@ -417,6 +464,8 @@ def run_cnn2d(
         if auc > best["auc"]:
             best["auc"] = auc
             best["state"] = {k: v.detach().cpu() for k, v in net.state_dict().items()}
+            if attn is not None:
+                best["attn"] = {k: v.detach().cpu() for k, v in attn.state_dict().items()}
             best_thr = float(thr)
             best_epoch = int(ep + 1)
 
@@ -428,8 +477,10 @@ def run_cnn2d(
 
     if best["state"] is not None:
         net.load_state_dict(best["state"])
+        if attn is not None and "attn" in best:
+            attn.load_state_dict(best["attn"])
 
-    te_auc, te_bac05, te_p = _eval(net, dl_te, dev, pool=cfg.pool)
+    te_auc, te_bac05, te_p = _eval(net, dl_te, dev, pool=cfg.pool, attn=attn)
     te_df = pd.DataFrame([{"id": k, "p": float(v)} for k, v in te_p.items()])
     te_df = te_df.merge(dte[["id", "y"]], on="id", how="inner")
     te_y = te_df["y"].to_numpy(dtype=int)
