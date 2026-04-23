@@ -6,17 +6,27 @@ import nibabel as nib
 import numpy as np
 
 
-def fix_img(img: Path) -> Path:
-    if img.exists():
-        return img
-    s = img.as_posix()
-    old = "data/interim/oasis1/"
-    new = "data/oasis1/"
-    if s.startswith(old):
-        alt = Path(new + s[len(old):])
+def fix_path(p: Path) -> Path:
+    if p.exists():
+        return p
+    s = p.as_posix()
+    old = "/data/interim/oasis1/"
+    new = "/data/oasis1/"
+    if old in s:
+        alt = Path(s.replace(old, new, 1))
         if alt.exists():
             return alt
-    return img
+    old_rel = "data/interim/oasis1/"
+    new_rel = "data/oasis1/"
+    if s.startswith(old_rel):
+        alt = Path(new_rel + s[len(old_rel):])
+        if alt.exists():
+            return alt
+    return p
+
+
+def fix_img(img: Path) -> Path:
+    return fix_path(img)
 
 
 def load_analyze(img: Path) -> np.ndarray:

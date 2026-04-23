@@ -39,6 +39,7 @@ uv run obench cnn2d \
   --ch 3 \
   --arch tiny \
   --pool mean \
+  --pick mid \
   --slices 24
 
 uv run obench cal \

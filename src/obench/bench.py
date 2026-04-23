@@ -30,7 +30,7 @@ class CnnJob:
 def _preset(name: str) -> list[CnnJob]:
     if name == "best":
         return [
-            CnnJob(name="coronal3_tiny_mean", axis=1, ch=3, arch="tiny", pool="mean", pick="topnz", slices=24, bs=8, lr=3e-4),
+            CnnJob(name="coronal3_tiny_mean_mid", axis=1, ch=3, arch="tiny", pool="mean", pick="mid", slices=24, bs=8, lr=3e-4),
         ]
     if name == "quick":
         return [

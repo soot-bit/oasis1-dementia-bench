@@ -28,7 +28,7 @@ from .utils.img import load_analyze, zscore_brain
 @dataclass(frozen=True)
 class Cfg:
     slices: int = 24  # per volume (evenly spaced)
-    pick: str = "topnz"  # topnz|lin
+    pick: str = "topnz"  # topnz|lin|mid
     aug: bool = True
     pool: str = "max"  # mean|max|lse
     axis: int = 2
@@ -50,6 +50,12 @@ def _pick_slices(a: np.ndarray, k: int, mode: str) -> np.ndarray:
 
     if mode == "lin":
         return np.linspace(0, z - 1, num=k).astype(int)
+    if mode == "mid":
+        lo = int(round(0.25 * max(0, z - 1)))
+        hi = int(round(0.75 * max(0, z - 1)))
+        if hi <= lo:
+            return np.linspace(0, z - 1, num=k).astype(int)
+        return np.linspace(lo, hi, num=k).astype(int)
 
     # default: choose slices with most non-zero voxels (brain content)
     nz = np.count_nonzero(a != 0, axis=(0, 1))  # (Z,)
@@ -63,8 +69,6 @@ def _aug(x: torch.Tensor) -> torch.Tensor:
     # light, label-preserving intensity/noise aug
     if torch.rand(()) < 0.5:
         x = torch.flip(x, dims=[-1])  # left-right
-    if torch.rand(()) < 0.2:
-        x = torch.flip(x, dims=[-2])  # up-down (small prob)
     if torch.rand(()) < 0.9:
         s = 0.90 + 0.20 * torch.rand(())
         x = x * s
